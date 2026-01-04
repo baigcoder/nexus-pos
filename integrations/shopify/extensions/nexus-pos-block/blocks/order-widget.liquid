@@ -1,0 +1,77 @@
+{% comment %}
+  Nexus POS Order Widget Block
+  Add this block to any page/section to display the order button
+{% endcomment %}
+
+{% schema %}
+{
+  "name": "Nexus POS Order",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "restaurant_slug",
+      "label": "Restaurant Slug",
+      "default": "",
+      "info": "Your Nexus POS restaurant slug"
+    },
+    {
+      "type": "select",
+      "id": "theme",
+      "label": "Theme",
+      "options": [
+        { "value": "dark", "label": "Dark" },
+        { "value": "light", "label": "Light" }
+      ],
+      "default": "dark"
+    },
+    {
+      "type": "select",
+      "id": "display_type",
+      "label": "Display Type",
+      "options": [
+        { "value": "button", "label": "Floating Button" },
+        { "value": "inline", "label": "Inline Menu" }
+      ],
+      "default": "button"
+    },
+    {
+      "type": "text",
+      "id": "button_text",
+      "label": "Button Text",
+      "default": "Order Now"
+    },
+    {
+      "type": "color",
+      "id": "button_color",
+      "label": "Button Color",
+      "default": "#7c3aed"
+    }
+  ]
+}
+{% endschema %}
+
+{% if block.settings.display_type == 'inline' %}
+  <div class="nexus-pos-inline" style="width: 100%; min-height: 600px;">
+    <iframe 
+      src="https://nexuspos.com/embed/{{ block.settings.restaurant_slug }}?theme={{ block.settings.theme }}"
+      style="width: 100%; height: 100%; min-height: 600px; border: none; border-radius: 16px;"
+      loading="lazy"
+      title="Restaurant Menu">
+    </iframe>
+  </div>
+{% else %}
+  <script 
+    src="https://nexuspos.com/widget.js" 
+    data-restaurant="{{ block.settings.restaurant_slug }}"
+    data-theme="{{ block.settings.theme }}"
+    data-button-text="{{ block.settings.button_text }}"
+    async>
+  </script>
+  
+  <style>
+    .nexus-widget-button {
+      background: {{ block.settings.button_color }} !important;
+    }
+  </style>
+{% endif %}

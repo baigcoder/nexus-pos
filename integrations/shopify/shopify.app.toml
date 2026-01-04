@@ -1,0 +1,32 @@
+# Shopify App Configuration
+# https://shopify.dev/docs/apps/tools/cli/configuration
+
+name = "Nexus POS"
+client_id = "YOUR_CLIENT_ID"
+
+[access_scopes]
+scopes = "read_products,write_orders,read_orders"
+
+[auth]
+redirect_urls = [
+  "https://nexuspos.com/api/shopify/callback"
+]
+
+[webhooks]
+api_version = "2024-01"
+
+  [[webhooks.subscriptions]]
+  topics = ["orders/create"]
+  uri = "https://nexuspos.com/api/shopify/webhooks/orders"
+
+[app_proxy]
+url = "https://nexuspos.com/api/shopify/proxy"
+prefix = "apps"
+subpath = "nexus-pos"
+
+[pos]
+embedded = false
+
+[[extensions.theme]]
+name = "Nexus POS Order"
+type = "theme_app_extension"

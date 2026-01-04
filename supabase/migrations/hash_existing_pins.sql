@@ -1,0 +1,57 @@
+-- Migration: Hash Existing Staff PINs
+-- NOTE: This migration needs to be run via a server-side script since 
+-- Postgres doesn't have native bcrypt support. 
+-- 
+-- The API already supports both hashed and plain-text PINs during the transition period.
+-- 
+-- To hash existing PINs, run this Node.js script after deploying the updated code:
+--
+-- ============================================
+-- hash-existing-pins.js (run with: node hash-existing-pins.js)
+-- ============================================
+-- 
+-- const { createClient } = require('@supabase/supabase-js')
+-- const bcrypt = require('bcryptjs')
+-- 
+-- const supabase = createClient(
+--     process.env.NEXT_PUBLIC_SUPABASE_URL,
+--     process.env.SUPABASE_SERVICE_ROLE_KEY
+-- )
+-- 
+-- async function hashExistingPins() {
+--     const { data: staff, error } = await supabase
+--         .from('staff')
+--         .select('id, pin')
+--     
+--     if (error) {
+--         console.error('Error fetching staff:', error)
+--         return
+--     }
+--     
+--     for (const member of staff) {
+--         // Skip already hashed PINs
+--         if (member.pin.startsWith('$2')) continue
+--         
+--         const hashedPin = await bcrypt.hash(member.pin, 10)
+--         const { error: updateError } = await supabase
+--             .from('staff')
+--             .update({ pin: hashedPin })
+--             .eq('id', member.id)
+--         
+--         if (updateError) {
+--             console.error(`Error updating PIN for ${member.id}:`, updateError)
+--         } else {
+--             console.log(`Hashed PIN for staff ${member.id}`)
+--         }
+--     }
+--     
+--     console.log('Done hashing PINs!')
+-- }
+-- 
+-- hashExistingPins()
+-- ============================================
+
+-- Add a constraint to ensure PINs are 4 characters (for plain text) or hashed (60 chars)
+-- This is informational only - actual PIN validation is in the application layer
+
+COMMENT ON COLUMN staff.pin IS 'Staff PIN - stored as bcrypt hash (60 chars) or plain text (4 digits) during migration period';

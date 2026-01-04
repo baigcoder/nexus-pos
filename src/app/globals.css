@@ -1,26 +1,146 @@
 @import "tailwindcss";
+@plugin "daisyui";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ===================================
+   OrderFlow Premium v7.0
+   Design System Foundation
+   =================================== */
+
+@theme {
+  /* Brand Palette - Vibrant Orange (Appetizing & Energetic) */
+  --color-primary: #f97316;
+  --color-primary-dark: #ea580c;
+  --color-primary-light: #fdba74;
+
+  /* Secondary - Emerald (Growth/Success) */
+  --color-secondary: #10b981;
+
+  /* Neutral Palette - True Gray (No Blue/Purple Undertones) */
+  --color-neutral-50: #fafafa;
+  --color-neutral-100: #f5f5f5;
+  --color-neutral-200: #e5e5e5;
+  --color-neutral-300: #d4d4d4;
+  --color-neutral-400: #a3a3a3;
+  --color-neutral-500: #737373;
+  --color-neutral-600: #525252;
+  --color-neutral-700: #404040;
+  --color-neutral-800: #262626;
+  --color-neutral-900: #171717;
+  --color-neutral-950: #0a0a0a;
+  /* Pure Neutral */
+
+  /* Semantic Colors */
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-info: #3b82f6;
+
+  /* Typography */
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-display: var(--font-outfit), sans-serif;
+
+  /* Premium Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.06);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+  --shadow-orange: 0 10px 40px -10px rgba(249, 115, 22, 0.4);
+  /* Glow effect */
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+:root {
+  /* Light Mode */
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+
+  --surface: #ffffff;
+  --surface-hover: #f5f5f5;
+  --surface-active: #e5e5e5;
+
+  --border: #e5e5e5;
+  --muted: #737373;
+  --muted-foreground: #a3a3a3;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not(.light-mode) {
     --background: #0a0a0a;
-    --foreground: #ededed;
+    /* True Black/Neutral 950 */
+    --foreground: #fafafa;
+
+    --surface: #171717;
+    /* Neutral 900 */
+    --surface-hover: #262626;
+    /* Neutral 800 */
+    --surface-active: #404040;
+    /* Neutral 700 */
+
+    --border: #262626;
+    --muted: #a3a3a3;
+    --muted-foreground: #737373;
   }
 }
 
+/* Base Overrides */
 body {
-  background: var(--background);
+  background-color: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ===================================
+   Premium Utilities
+   =================================== */
+
+/* Custom Scrollbar - Slim & Sleek */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+}
+
+:hover::-webkit-scrollbar-thumb {
+  background: var(--border);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* Glow Utilities */
+.shadow-glow {
+  box-shadow: var(--shadow-orange);
+}
+
+/* Glassmorphism */
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* DaisyUI Theme Overrides - Force Orange */
+:root,
+[data-theme] {
+  --p: 24.6 95% 53.1%;
+  /* Orange HSL */
+  --pc: 0 0% 100%;
+  /* White text on primary */
+  --af: 24.6 95% 45%;
+  /* Darker orange for hover/active */
+}
+
+.dark .glass {
+  background: rgba(10, 10, 10, 0.7);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
