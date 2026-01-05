@@ -17,22 +17,22 @@ Found 1 warning while optimizing generated CSS:
 Γöé     syntax: "<percentage>";
 Γöé     inherits: true;
 
-Γ£ô Compiled successfully in 15.4s
+Γ£ô Compiled successfully in 15.1s
   Running TypeScript ...
   Collecting page data using 11 workers ...
   Generating static pages using 11 workers (0/68) ...
-(node:18688) Warning: `--localstorage-file` was provided without a valid path
+(node:16272) Warning: `--localstorage-file` was provided without a valid path
 (Use `node --trace-warnings ...` to show where the warning was created)
-(node:9884) Warning: `--localstorage-file` was provided without a valid path
+(node:18480) Warning: `--localstorage-file` was provided without a valid path
 (Use `node --trace-warnings ...` to show where the warning was created)
-(node:16672) Warning: `--localstorage-file` was provided without a valid path
+(node:21268) Warning: `--localstorage-file` was provided without a valid path
 (Use `node --trace-warnings ...` to show where the warning was created)
 Supabase client created during SSR without env vars - will hydrate on client
 Supabase client created during SSR without env vars - will hydrate on client
   Generating static pages using 11 workers (17/68) 
   Generating static pages using 11 workers (34/68) 
   Generating static pages using 11 workers (51/68) 
-Γ£ô Generating static pages using 11 workers (68/68) in 1156.4ms
+Γ£ô Generating static pages using 11 workers (68/68) in 1128.6ms
   Finalizing page optimization ...
 
 Route (app)
