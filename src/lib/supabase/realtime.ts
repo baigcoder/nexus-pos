@@ -28,7 +28,7 @@ export function subscribeToOrders(
                 table: 'orders',
                 filter: `restaurant_id=eq.${restaurantId}`,
             },
-            (payload) => {
+            (payload: any) => {
                 if (onInsert) onInsert(payload.new as Order)
             }
         )
@@ -40,7 +40,7 @@ export function subscribeToOrders(
                 table: 'orders',
                 filter: `restaurant_id=eq.${restaurantId}`,
             },
-            (payload) => {
+            (payload: any) => {
                 if (onUpdate) onUpdate(payload.new as Order)
             }
         )
@@ -52,7 +52,7 @@ export function subscribeToOrders(
                 table: 'orders',
                 filter: `restaurant_id=eq.${restaurantId}`,
             },
-            (payload) => {
+            (payload: any) => {
                 if (onDelete) onDelete(payload.old as Order)
             }
         )
@@ -82,7 +82,7 @@ export function subscribeToOrderItems(
                 table: 'order_items',
                 filter: `order_id=eq.${orderId}`,
             },
-            (payload) => {
+            (payload: any) => {
                 if (payload.eventType === 'INSERT' && onInsert) {
                     onInsert(payload.new as OrderItem)
                 } else if (payload.eventType === 'UPDATE' && onUpdate) {
@@ -116,7 +116,7 @@ export function subscribeToTables(
                 table: 'tables',
                 filter: `restaurant_id=eq.${restaurantId}`,
             },
-            (payload) => {
+            (payload: any) => {
                 if (onUpdate) onUpdate(payload.new as Table)
             }
         )

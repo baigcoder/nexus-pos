@@ -40,11 +40,15 @@ function checkRateLimit(restaurantId: string): boolean {
     return true
 }
 
-// Create Supabase admin client (outside handler for reuse)
-const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+// Create Supabase admin client lazily (not at module level to avoid build-time errors)
+function getAdminClient() {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!url || !key) {
+        throw new Error('Supabase configuration missing')
+    }
+    return createClient(url, key)
+}
 
 export async function POST(request: NextRequest) {
     try {
@@ -83,6 +87,8 @@ export async function POST(request: NextRequest) {
                 { status: 429 }
             )
         }
+
+        const supabase = getAdminClient()
 
         // Check if restaurant exists
         const { data: restaurant, error: restaurantError } = await supabase

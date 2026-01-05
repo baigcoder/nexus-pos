@@ -122,7 +122,7 @@ export default function TrackOrderPage({
                     table: 'rider_locations',
                     filter: `rider_id=eq.${trackingData.delivery.rider.id}`,
                 },
-                (payload) => {
+                (payload: any) => {
                     setTrackingData(prev => {
                         if (!prev) return prev
                         return {

@@ -1,0 +1,114 @@
+
+> orderflow@0.1.0 build
+> next build
+
+Γû▓ Next.js 16.1.1 (Turbopack)
+
+ΓÜá The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+  Creating an optimized production build ...
+/*! ≡ƒî╝ daisyUI 5.5.14 */
+Found 1 warning while optimizing generated CSS:
+
+Γöé }
+Γöé @layer base {
+Γöé   @property --radialprogress {
+Γöå            ^-- Unknown at rule: @property
+Γöå
+Γöé     syntax: "<percentage>";
+Γöé     inherits: true;
+
+Γ£ô Compiled successfully in 15.4s
+  Running TypeScript ...
+  Collecting page data using 11 workers ...
+  Generating static pages using 11 workers (0/68) ...
+(node:18688) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:9884) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:16672) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+Supabase client created during SSR without env vars - will hydrate on client
+Supabase client created during SSR without env vars - will hydrate on client
+  Generating static pages using 11 workers (17/68) 
+  Generating static pages using 11 workers (34/68) 
+  Generating static pages using 11 workers (51/68) 
+Γ£ô Generating static pages using 11 workers (68/68) in 1156.4ms
+  Finalizing page optimization ...
+
+Route (app)
+Γöî Γùï /
+Γö£ Γùï /_not-found
+Γö£ ╞Æ /api/auth/migrate-pins
+Γö£ ╞Æ /api/auth/send-otp
+Γö£ ╞Æ /api/auth/staff-check
+Γö£ ╞Æ /api/auth/staff-email-login
+Γö£ ╞Æ /api/auth/staff-login
+Γö£ ╞Æ /api/auth/staff-setup
+Γö£ ╞Æ /api/auth/verify-otp
+Γö£ ╞Æ /api/delivery/location
+Γö£ ╞Æ /api/notifications/send
+Γö£ ╞Æ /api/settings/api-keys
+Γö£ ╞Æ /api/settings/api-keys/[keyId]
+Γö£ ╞Æ /api/setup/create-restaurant
+Γö£ ╞Æ /api/staff/invite
+Γö£ ╞Æ /api/track
+Γö£ ╞Æ /api/v1/menu
+Γö£ ╞Æ /api/v1/orders
+Γö£ ╞Æ /auth/callback
+Γö£ Γùï /book
+Γö£ Γùï /dashboard
+Γö£ Γùï /dashboard/analytics
+Γö£ Γùï /dashboard/billing
+Γö£ Γùï /dashboard/cashier
+Γö£ Γùï /dashboard/delivery-boy
+Γö£ Γùï /dashboard/delivery-monitor
+Γö£ Γùï /dashboard/discounts
+Γö£ Γùï /dashboard/display-manager
+Γö£ Γùï /dashboard/expenses
+Γö£ Γùï /dashboard/feedback
+Γö£ Γùï /dashboard/franchise
+Γö£ Γùï /dashboard/inventory
+Γö£ Γùï /dashboard/kitchen
+Γö£ Γùï /dashboard/kitchen-view
+Γö£ Γùï /dashboard/loyalty
+Γö£ Γùï /dashboard/menu
+Γö£ Γùï /dashboard/my-orders
+Γö£ Γùï /dashboard/my-shift
+Γö£ Γùï /dashboard/order-desk
+Γö£ Γùï /dashboard/orders
+Γö£ Γùï /dashboard/profile
+Γö£ Γùï /dashboard/qr-codes
+Γö£ Γùï /dashboard/qr-ordering
+Γö£ Γùï /dashboard/reports
+Γö£ Γùï /dashboard/reservations
+Γö£ Γùï /dashboard/riders
+Γö£ Γùï /dashboard/settings
+Γö£ Γùï /dashboard/settings/api-keys
+Γö£ Γùï /dashboard/shifts
+Γö£ Γùï /dashboard/specials
+Γö£ Γùï /dashboard/staff
+Γö£ Γùï /dashboard/staff-performance
+Γö£ Γùï /dashboard/tables
+Γö£ Γùï /dashboard/take-order
+Γö£ Γùï /dashboard/tips
+Γö£ Γùï /dashboard/waiter
+Γö£ ╞Æ /display/[slug]
+Γö£ ╞Æ /embed/[slug]
+Γö£ Γùï /login
+Γö£ Γùï /order
+Γö£ Γùï /register
+Γö£ Γùï /screen-login
+Γö£ Γùï /setup
+Γö£ Γùï /staff-login
+Γö£ Γùï /staff-setup
+Γö£ Γùï /track
+Γö£ Γùï /trial-started
+Γö£ Γùï /verify-otp
+Γöö Γùï /waiter
+
+
+╞Æ Proxy (Middleware)
+
+Γùï  (Static)   prerendered as static content
+╞Æ  (Dynamic)  server-rendered on demand
+

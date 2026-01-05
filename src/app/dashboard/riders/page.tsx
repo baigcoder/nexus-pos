@@ -81,7 +81,7 @@ export default function RidersPage() {
             if (error) throw error
 
             // Map staff data to Rider interface
-            const riderData: Rider[] = (data || []).map(staff => ({
+            const riderData: Rider[] = (data || []).map((staff: any) => ({
                 id: staff.id,
                 name: staff.name,
                 phone: staff.phone || 'N/A',

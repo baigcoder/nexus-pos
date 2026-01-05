@@ -635,10 +635,10 @@ export async function fetchDailyReport(restaurantId: string, date: string) {
 
     const report = {
         total_orders: orders.length,
-        total_revenue: orders.reduce((sum, o) => sum + o.total, 0),
-        total_tax: orders.reduce((sum, o) => sum + o.tax, 0),
-        total_discounts: orders.reduce((sum, o) => sum + o.discount, 0),
-        avg_order_value: orders.length > 0 ? orders.reduce((sum, o) => sum + o.total, 0) / orders.length : 0
+        total_revenue: orders.reduce((sum: number, o: any) => sum + o.total, 0),
+        total_tax: orders.reduce((sum: number, o: any) => sum + o.tax, 0),
+        total_discounts: orders.reduce((sum: number, o: any) => sum + o.discount, 0),
+        avg_order_value: orders.length > 0 ? orders.reduce((sum: number, o: any) => sum + o.total, 0) / orders.length : 0
     }
 
     return report

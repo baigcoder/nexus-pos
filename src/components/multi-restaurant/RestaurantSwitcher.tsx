@@ -41,8 +41,8 @@ export default function RestaurantSwitcher() {
 
         if (staffRecords) {
             const uniqueRestaurants = staffRecords
-                .filter(s => s.restaurants)
-                .map(s => s.restaurants as unknown as Restaurant)
+                .filter((s: any) => s.restaurants)
+                .map((s: any) => s.restaurants as unknown as Restaurant)
             setRestaurants(uniqueRestaurants)
         }
 

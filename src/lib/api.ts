@@ -378,7 +378,7 @@ export async function createOrder(
         if (menuError) throw menuError
 
         // Calculate totals
-        const priceMap = new Map(menuItems?.map(m => [m.id, m.price]) || [])
+        const priceMap = new Map<string, number>(menuItems?.map((m: any) => [m.id, m.price]) || [])
         let subtotal = 0
         const orderItems = items.map(item => {
             const price = priceMap.get(item.menu_item_id) || 0

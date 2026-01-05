@@ -86,7 +86,7 @@ export default function TakeOrderPage() {
 
             if (menuData) {
                 setMenuItems(menuData)
-                const cats = [...new Set(menuData.map(item => item.category))]
+                const cats = [...new Set(menuData.map((item: any) => item.category))] as string[]
                 setCategories(cats)
             }
 

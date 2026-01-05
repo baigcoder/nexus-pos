@@ -90,7 +90,7 @@ export default function CustomerDisplayPage() {
                 schema: 'public',
                 table: 'orders',
                 filter: `restaurant_id=eq.${restaurant.id}`
-            }, (payload) => {
+            }, (payload: any) => {
                 console.log('Order update:', payload)
                 loadRecentOrders()
             })

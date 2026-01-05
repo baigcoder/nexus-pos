@@ -84,7 +84,7 @@ export function ChatWidget() {
                 schema: 'public',
                 table: 'messages',
                 filter: `receiver_id=eq.${staff.id}`,
-            }, (payload) => {
+            }, (payload: any) => {
                 setMessages((prev) => [...prev, payload.new as Message])
             })
             .subscribe()

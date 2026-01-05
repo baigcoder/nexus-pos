@@ -65,8 +65,8 @@ export default function FranchiseDashboardPage() {
 
         // Mock stats for now (real implementation would aggregate from orders)
         const locationData: LocationStats[] = staffRecords
-            .filter(s => s.restaurants)
-            .map((s, i) => ({
+            .filter((s: any) => s.restaurants)
+            .map((s: any, i: number) => ({
                 id: (s.restaurants as any).id,
                 name: (s.restaurants as any).name,
                 address: (s.restaurants as any).address,

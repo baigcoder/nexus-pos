@@ -1,11 +1,35 @@
 import { createBrowserClient } from '@supabase/ssr'
 import type { AuthUser, Staff, Restaurant, UserRole } from '@/types'
 
+// Singleton client for client-side usage
+let supabaseClient: ReturnType<typeof createBrowserClient> | null = null
+
 export function createClient() {
-    return createBrowserClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    // Return cached client if available
+    if (supabaseClient) return supabaseClient
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+    // During build time or SSR, env vars might not be available
+    // In Next.js, NEXT_PUBLIC vars are inlined at build time, but if they're missing,
+    // we should throw a clear error
+    if (!supabaseUrl || !supabaseAnonKey) {
+        // Check if we're on the client side
+        if (typeof window !== 'undefined') {
+            throw new Error('Supabase environment variables are not configured. Check NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.')
+        }
+        // During SSR/build, create a dummy client that will be replaced on client
+        // This prevents build errors for client components
+        console.warn('Supabase client created during SSR without env vars - will hydrate on client')
+    }
+
+    supabaseClient = createBrowserClient(
+        supabaseUrl || 'https://placeholder.supabase.co',
+        supabaseAnonKey || 'placeholder-key'
     )
+
+    return supabaseClient
 }
 
 // ============================================
@@ -98,9 +122,9 @@ export async function signInWithPin(restaurantSlug: string, pin: string): Promis
             },
             body: JSON.stringify({ restaurantSlug, pin }),
         })
-        
+
         const data = await response.json()
-        
+
         if (!response.ok) {
             return {
                 success: false,
@@ -109,7 +133,7 @@ export async function signInWithPin(restaurantSlug: string, pin: string): Promis
                 retryAfter: data.retryAfter
             }
         }
-        
+
         return {
             success: true,
             staff: data.staff,

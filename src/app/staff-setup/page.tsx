@@ -100,7 +100,7 @@ function StaffSetupContent() {
                 .select('*, restaurants(*)')
                 .eq('id', staffId)
                 .single()
-                .then(({ data, error }) => {
+                .then(({ data, error }: { data: any; error: any }) => {
                     if (error || !data) {
                         showError('Error', 'Staff member not found')
                         router.push('/staff-login')

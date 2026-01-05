@@ -80,7 +80,7 @@ export default function TipsPage() {
             const { data } = await query
 
             if (data) {
-                const tipEntries = data.map(order => ({
+                const tipEntries = data.map((order: any) => ({
                     id: order.id,
                     order_id: order.id,
                     amount: order.tip_amount || 0,
