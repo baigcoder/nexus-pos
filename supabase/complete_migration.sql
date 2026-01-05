@@ -1,21 +1,21 @@
 -- ============================================
--- OrderFlow Complete Database Migration
--- Run this in your Supabase SQL Editor
+-- OrderFlow Complete Database Schema
+-- ALL TABLES - Run this in Supabase SQL Editor
 -- ============================================
--- Version: 1.0
--- Last Updated: 2026-01-03
+-- Version: 2.0
+-- Last Updated: 2026-01-04
+-- Total Tables: 20
 -- ============================================
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ============================================
 -- SECTION 1: CORE TABLES
 -- ============================================
 
--- ============================================
--- 1.1 RESTAURANTS TABLE
--- ============================================
+-- 1.1 RESTAURANTS
 CREATE TABLE IF NOT EXISTS restaurants (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     owner_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -33,31 +33,27 @@ CREATE TABLE IF NOT EXISTS restaurants (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
 CREATE INDEX IF NOT EXISTS idx_restaurants_owner ON restaurants(owner_id);
+CREATE INDEX IF NOT EXISTS idx_restaurants_slug ON restaurants(slug);
 
--- ============================================
--- 1.2 STAFF TABLE
--- ============================================
+-- 1.2 STAFF
 CREATE TABLE IF NOT EXISTS staff (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
     user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255),
-    pin VARCHAR(10),
-    role VARCHAR(50) NOT NULL CHECK (role IN ('owner', 'manager', 'waiter', 'kitchen', 'cashier')),
+    pin VARCHAR(255), -- Hashed PIN
+    role VARCHAR(50) NOT NULL CHECK (role IN ('owner', 'manager', 'waiter', 'kitchen', 'cashier', 'delivery')),
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
 CREATE INDEX IF NOT EXISTS idx_staff_restaurant ON staff(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_staff_pin ON staff(restaurant_id, pin);
+CREATE INDEX IF NOT EXISTS idx_staff_role ON staff(restaurant_id, role);
 
--- ============================================
--- 1.3 CATEGORIES TABLE
--- ============================================
+-- 1.3 CATEGORIES
 CREATE TABLE IF NOT EXISTS categories (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
@@ -69,12 +65,9 @@ CREATE TABLE IF NOT EXISTS categories (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
 CREATE INDEX IF NOT EXISTS idx_categories_restaurant ON categories(restaurant_id);
 
--- ============================================
--- 1.4 MENU ITEMS TABLE
--- ============================================
+-- 1.4 MENU ITEMS
 CREATE TABLE IF NOT EXISTS menu_items (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
@@ -93,14 +86,11 @@ CREATE TABLE IF NOT EXISTS menu_items (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
 CREATE INDEX IF NOT EXISTS idx_menu_items_restaurant ON menu_items(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_menu_items_category ON menu_items(category_id);
 CREATE INDEX IF NOT EXISTS idx_menu_items_available ON menu_items(restaurant_id, is_available);
 
--- ============================================
--- 1.5 TABLES TABLE
--- ============================================
+-- 1.5 TABLES
 CREATE TABLE IF NOT EXISTS tables (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
@@ -113,12 +103,10 @@ CREATE TABLE IF NOT EXISTS tables (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(restaurant_id, table_number)
 );
-
 CREATE INDEX IF NOT EXISTS idx_tables_restaurant ON tables(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_tables_status ON tables(restaurant_id, status);
 
--- ============================================
--- 1.6 ORDERS TABLE
--- ============================================
+-- 1.6 ORDERS
 CREATE TABLE IF NOT EXISTS orders (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
@@ -135,15 +123,12 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
 CREATE INDEX IF NOT EXISTS idx_orders_restaurant ON orders(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_orders_table ON orders(table_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(restaurant_id, status);
 CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(restaurant_id, created_at DESC);
 
--- ============================================
--- 1.7 ORDER ITEMS TABLE
--- ============================================
+-- 1.7 ORDER ITEMS
 CREATE TABLE IF NOT EXISTS order_items (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -156,12 +141,10 @@ CREATE TABLE IF NOT EXISTS order_items (
     status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'preparing', 'ready', 'served')),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
 CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_status ON order_items(order_id, status);
 
--- ============================================
--- 1.8 PAYMENTS TABLE
--- ============================================
+-- 1.8 PAYMENTS
 CREATE TABLE IF NOT EXISTS payments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -172,31 +155,196 @@ CREATE TABLE IF NOT EXISTS payments (
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
 CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
 
--- ============================================
--- 1.9 SPLIT PAYMENTS TABLE
--- ============================================
+-- 1.9 SPLIT PAYMENTS
 CREATE TABLE IF NOT EXISTS split_payments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     split_number INTEGER NOT NULL,
     amount DECIMAL(10,2) NOT NULL,
-    payment_method VARCHAR(50),
+    payment_method VARCHAR(50) CHECK (payment_method IN ('cash', 'card', 'mobile', 'other')),
     payment_status VARCHAR(50) DEFAULT 'pending' CHECK (payment_status IN ('pending', 'completed', 'failed', 'refunded')),
     items JSONB DEFAULT '[]',
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
 CREATE INDEX IF NOT EXISTS idx_split_payments_order ON split_payments(order_id);
-CREATE INDEX IF NOT EXISTS idx_split_payments_status ON split_payments(order_id, payment_status);
 
 -- ============================================
--- 1.10 MESSAGES TABLE (Staff Communication)
+-- SECTION 2: EXTENDED FEATURE TABLES
 -- ============================================
+
+-- 2.1 INVENTORY
+CREATE TABLE IF NOT EXISTS inventory (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    unit VARCHAR(50) NOT NULL,
+    current_stock DECIMAL(10,2) DEFAULT 0,
+    min_stock DECIMAL(10,2) DEFAULT 0,
+    cost_per_unit DECIMAL(10,2) DEFAULT 0,
+    supplier_name VARCHAR(255),
+    supplier_contact VARCHAR(255),
+    last_restocked TIMESTAMPTZ,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_restaurant ON inventory(restaurant_id);
+
+-- 2.2 RESERVATIONS
+CREATE TABLE IF NOT EXISTS reservations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    table_id UUID REFERENCES tables(id) ON DELETE SET NULL,
+    customer_name VARCHAR(255) NOT NULL,
+    customer_phone VARCHAR(50),
+    customer_email VARCHAR(255),
+    party_size INTEGER NOT NULL,
+    reservation_date DATE NOT NULL,
+    reservation_time TIME NOT NULL,
+    duration_minutes INTEGER DEFAULT 90,
+    status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'seated', 'completed', 'cancelled', 'no_show')),
+    special_requests TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_reservations_restaurant ON reservations(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_reservations_date ON reservations(restaurant_id, reservation_date);
+
+-- 2.3 DISCOUNT CODES
+CREATE TABLE IF NOT EXISTS discount_codes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    code VARCHAR(50) NOT NULL,
+    description TEXT,
+    type VARCHAR(20) NOT NULL CHECK (type IN ('percentage', 'fixed')),
+    value DECIMAL(10,2) NOT NULL,
+    min_order_amount DECIMAL(10,2) DEFAULT 0,
+    max_discount DECIMAL(10,2),
+    usage_limit INTEGER,
+    times_used INTEGER DEFAULT 0,
+    valid_from TIMESTAMPTZ NOT NULL,
+    valid_until TIMESTAMPTZ,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(restaurant_id, code)
+);
+CREATE INDEX IF NOT EXISTS idx_discount_codes_restaurant ON discount_codes(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_discount_codes_code ON discount_codes(restaurant_id, code);
+
+-- 2.4 LOYALTY MEMBERS
+CREATE TABLE IF NOT EXISTS loyalty_members (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    phone VARCHAR(50) NOT NULL,
+    email VARCHAR(255),
+    points INTEGER DEFAULT 0,
+    tier VARCHAR(20) DEFAULT 'bronze' CHECK (tier IN ('bronze', 'silver', 'gold', 'platinum')),
+    total_spent DECIMAL(10,2) DEFAULT 0,
+    visits INTEGER DEFAULT 0,
+    last_visit TIMESTAMPTZ,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(restaurant_id, phone)
+);
+CREATE INDEX IF NOT EXISTS idx_loyalty_members_restaurant ON loyalty_members(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_loyalty_members_phone ON loyalty_members(restaurant_id, phone);
+
+-- 2.5 FEEDBACK
+CREATE TABLE IF NOT EXISTS feedback (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
+    customer_name VARCHAR(255),
+    customer_email VARCHAR(255),
+    overall_rating INTEGER NOT NULL CHECK (overall_rating >= 1 AND overall_rating <= 5),
+    food_rating INTEGER CHECK (food_rating >= 1 AND food_rating <= 5),
+    service_rating INTEGER CHECK (service_rating >= 1 AND service_rating <= 5),
+    ambiance_rating INTEGER CHECK (ambiance_rating >= 1 AND ambiance_rating <= 5),
+    comment TEXT,
+    waiter_name VARCHAR(255),
+    is_resolved BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_restaurant ON feedback(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_rating ON feedback(restaurant_id, overall_rating);
+
+-- 2.6 SHIFTS
+CREATE TABLE IF NOT EXISTS shifts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    staff_id UUID NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+    shift_date DATE NOT NULL,
+    start_time TIME NOT NULL,
+    end_time TIME,
+    break_minutes INTEGER DEFAULT 0,
+    status VARCHAR(50) DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'active', 'completed', 'absent')),
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_shifts_restaurant ON shifts(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(restaurant_id, shift_date);
+CREATE INDEX IF NOT EXISTS idx_shifts_staff ON shifts(staff_id);
+
+-- 2.7 EXPENSES
+CREATE TABLE IF NOT EXISTS expenses (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    category VARCHAR(50) NOT NULL CHECK (category IN ('ingredients', 'utilities', 'salary', 'supplies', 'maintenance', 'other')),
+    description TEXT NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    vendor VARCHAR(255),
+    expense_date DATE NOT NULL,
+    payment_method VARCHAR(20) CHECK (payment_method IN ('cash', 'card', 'transfer')),
+    receipt_url TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_expenses_restaurant ON expenses(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(restaurant_id, expense_date);
+CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(restaurant_id, category);
+
+-- 2.8 DAILY SPECIALS
+CREATE TABLE IF NOT EXISTS daily_specials (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    menu_item_id UUID NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
+    discount_percentage DECIMAL(5,2) NOT NULL,
+    special_date DATE NOT NULL,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_daily_specials_restaurant ON daily_specials(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_daily_specials_date ON daily_specials(restaurant_id, special_date);
+
+-- 2.9 DAILY REPORTS (Cached)
+CREATE TABLE IF NOT EXISTS daily_reports (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    report_date DATE NOT NULL,
+    total_orders INTEGER DEFAULT 0,
+    total_revenue DECIMAL(10,2) DEFAULT 0,
+    total_tax DECIMAL(10,2) DEFAULT 0,
+    total_discounts DECIMAL(10,2) DEFAULT 0,
+    avg_order_value DECIMAL(10,2) DEFAULT 0,
+    top_items JSONB DEFAULT '[]',
+    hourly_sales JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(restaurant_id, report_date)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_reports_restaurant ON daily_reports(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_daily_reports_date ON daily_reports(restaurant_id, report_date);
+
+-- ============================================
+-- SECTION 3: SYSTEM TABLES
+-- ============================================
+
+-- 3.1 MESSAGES (Staff Communication)
 CREATE TABLE IF NOT EXISTS messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
@@ -207,15 +355,11 @@ CREATE TABLE IF NOT EXISTS messages (
     is_read BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
 CREATE INDEX IF NOT EXISTS idx_messages_restaurant ON messages(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id);
-CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(restaurant_id, created_at DESC);
 
--- ============================================
--- 1.11 OTP CODES TABLE
--- ============================================
+-- 3.2 OTP CODES
 CREATE TABLE IF NOT EXISTS otp_codes (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     email TEXT NOT NULL,
@@ -224,16 +368,13 @@ CREATE TABLE IF NOT EXISTS otp_codes (
     verified BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
 CREATE INDEX IF NOT EXISTS idx_otp_codes_email ON otp_codes(email);
 CREATE INDEX IF NOT EXISTS idx_otp_codes_expires_at ON otp_codes(expires_at);
 
-
 -- ============================================
--- SECTION 2: ROW LEVEL SECURITY (RLS)
+-- SECTION 4: ROW LEVEL SECURITY (RLS)
 -- ============================================
 
--- Enable RLS on all tables
 ALTER TABLE restaurants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE staff ENABLE ROW LEVEL SECURITY;
 ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
@@ -243,200 +384,67 @@ ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE split_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reservations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE discount_codes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE loyalty_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE feedback ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shifts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE daily_specials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE daily_reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE otp_codes ENABLE ROW LEVEL SECURITY;
 
--- ============================================
--- 2.1 RESTAURANTS POLICIES
--- ============================================
-CREATE POLICY "Users can view own restaurants" ON restaurants
-    FOR SELECT USING (auth.uid() = owner_id);
+-- RLS Policies for all tables (Safe to re-run)
+-- Drop existing policies first
+DROP POLICY IF EXISTS "Owner access" ON restaurants;
+DROP POLICY IF EXISTS "Restaurant staff access" ON staff;
+DROP POLICY IF EXISTS "Restaurant categories access" ON categories;
+DROP POLICY IF EXISTS "Restaurant menu_items access" ON menu_items;
+DROP POLICY IF EXISTS "Restaurant tables access" ON tables;
+DROP POLICY IF EXISTS "Restaurant orders access" ON orders;
+DROP POLICY IF EXISTS "Restaurant order_items access" ON order_items;
+DROP POLICY IF EXISTS "Restaurant payments access" ON payments;
+DROP POLICY IF EXISTS "Restaurant split_payments access" ON split_payments;
+DROP POLICY IF EXISTS "Restaurant inventory access" ON inventory;
+DROP POLICY IF EXISTS "Restaurant reservations access" ON reservations;
+DROP POLICY IF EXISTS "Restaurant discount_codes access" ON discount_codes;
+DROP POLICY IF EXISTS "Restaurant loyalty_members access" ON loyalty_members;
+DROP POLICY IF EXISTS "Restaurant feedback access" ON feedback;
+DROP POLICY IF EXISTS "Restaurant shifts access" ON shifts;
+DROP POLICY IF EXISTS "Restaurant expenses access" ON expenses;
+DROP POLICY IF EXISTS "Restaurant daily_specials access" ON daily_specials;
+DROP POLICY IF EXISTS "Restaurant daily_reports access" ON daily_reports;
+DROP POLICY IF EXISTS "Restaurant messages access" ON messages;
+DROP POLICY IF EXISTS "OTP full access" ON otp_codes;
 
-CREATE POLICY "Users can insert own restaurants" ON restaurants
-    FOR INSERT WITH CHECK (auth.uid() = owner_id);
-
-CREATE POLICY "Users can update own restaurants" ON restaurants
-    FOR UPDATE USING (auth.uid() = owner_id);
-
--- ============================================
--- 2.2 STAFF POLICIES
--- ============================================
-CREATE POLICY "Staff can view own restaurant staff" ON staff
-    FOR SELECT USING (
-        restaurant_id IN (
-            SELECT id FROM restaurants WHERE owner_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "Owners can manage staff" ON staff
-    FOR ALL USING (
-        restaurant_id IN (
-            SELECT id FROM restaurants WHERE owner_id = auth.uid()
-        )
-    );
-
--- ============================================
--- 2.3 CATEGORIES POLICIES
--- ============================================
-CREATE POLICY "Staff can view categories" ON categories
-    FOR SELECT USING (
-        restaurant_id IN (
-            SELECT id FROM restaurants WHERE owner_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "Owners can manage categories" ON categories
-    FOR ALL USING (
-        restaurant_id IN (
-            SELECT id FROM restaurants WHERE owner_id = auth.uid()
-        )
-    );
-
--- ============================================
--- 2.4 MENU ITEMS POLICIES
--- ============================================
-CREATE POLICY "Staff can view menu items" ON menu_items
-    FOR SELECT USING (
-        restaurant_id IN (
-            SELECT id FROM restaurants WHERE owner_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "Owners can manage menu items" ON menu_items
-    FOR ALL USING (
-        restaurant_id IN (
-            SELECT id FROM restaurants WHERE owner_id = auth.uid()
-        )
-    );
+-- Create policies
+CREATE POLICY "Owner access" ON restaurants FOR ALL USING (auth.uid() = owner_id);
+CREATE POLICY "Restaurant staff access" ON staff FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant categories access" ON categories FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant menu_items access" ON menu_items FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant tables access" ON tables FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant orders access" ON orders FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant order_items access" ON order_items FOR ALL USING (order_id IN (SELECT id FROM orders WHERE restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid())));
+CREATE POLICY "Restaurant payments access" ON payments FOR ALL USING (order_id IN (SELECT id FROM orders WHERE restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid())));
+CREATE POLICY "Restaurant split_payments access" ON split_payments FOR ALL USING (order_id IN (SELECT id FROM orders WHERE restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid())));
+CREATE POLICY "Restaurant inventory access" ON inventory FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant reservations access" ON reservations FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant discount_codes access" ON discount_codes FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant loyalty_members access" ON loyalty_members FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant feedback access" ON feedback FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant shifts access" ON shifts FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant expenses access" ON expenses FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant daily_specials access" ON daily_specials FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant daily_reports access" ON daily_reports FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "Restaurant messages access" ON messages FOR ALL USING (restaurant_id IN (SELECT id FROM restaurants WHERE owner_id = auth.uid()));
+CREATE POLICY "OTP full access" ON otp_codes FOR ALL USING (true) WITH CHECK (true);
 
 -- ============================================
--- 2.5 TABLES POLICIES
--- ============================================
-CREATE POLICY "Staff can view tables" ON tables
-    FOR SELECT USING (
-        restaurant_id IN (
-            SELECT id FROM restaurants WHERE owner_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "Owners can manage tables" ON tables
-    FOR ALL USING (
-        restaurant_id IN (
-            SELECT id FROM restaurants WHERE owner_id = auth.uid()
-        )
-    );
-
--- ============================================
--- 2.6 ORDERS POLICIES
--- ============================================
-CREATE POLICY "Staff can view orders" ON orders
-    FOR SELECT USING (
-        restaurant_id IN (
-            SELECT id FROM restaurants WHERE owner_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "Staff can manage orders" ON orders
-    FOR ALL USING (
-        restaurant_id IN (
-            SELECT id FROM restaurants WHERE owner_id = auth.uid()
-        )
-    );
-
--- ============================================
--- 2.7 ORDER ITEMS POLICIES
--- ============================================
-CREATE POLICY "Staff can view order items" ON order_items
-    FOR SELECT USING (
-        order_id IN (
-            SELECT id FROM orders WHERE restaurant_id IN (
-                SELECT id FROM restaurants WHERE owner_id = auth.uid()
-            )
-        )
-    );
-
-CREATE POLICY "Staff can manage order items" ON order_items
-    FOR ALL USING (
-        order_id IN (
-            SELECT id FROM orders WHERE restaurant_id IN (
-                SELECT id FROM restaurants WHERE owner_id = auth.uid()
-            )
-        )
-    );
-
--- ============================================
--- 2.8 PAYMENTS POLICIES
--- ============================================
-CREATE POLICY "Staff can view payments" ON payments
-    FOR SELECT USING (
-        order_id IN (
-            SELECT id FROM orders WHERE restaurant_id IN (
-                SELECT id FROM restaurants WHERE owner_id = auth.uid()
-            )
-        )
-    );
-
-CREATE POLICY "Staff can manage payments" ON payments
-    FOR ALL USING (
-        order_id IN (
-            SELECT id FROM orders WHERE restaurant_id IN (
-                SELECT id FROM restaurants WHERE owner_id = auth.uid()
-            )
-        )
-    );
-
--- ============================================
--- 2.9 SPLIT PAYMENTS POLICIES
--- ============================================
-CREATE POLICY "Staff can view split payments" ON split_payments
-    FOR SELECT USING (
-        order_id IN (
-            SELECT id FROM orders WHERE restaurant_id IN (
-                SELECT id FROM restaurants WHERE owner_id = auth.uid()
-            )
-        )
-    );
-
-CREATE POLICY "Staff can manage split payments" ON split_payments
-    FOR ALL USING (
-        order_id IN (
-            SELECT id FROM orders WHERE restaurant_id IN (
-                SELECT id FROM restaurants WHERE owner_id = auth.uid()
-            )
-        )
-    );
-
--- ============================================
--- 2.10 MESSAGES POLICIES
--- ============================================
-CREATE POLICY "Staff can view own restaurant messages" ON messages
-    FOR SELECT USING (
-        restaurant_id IN (
-            SELECT restaurant_id FROM staff WHERE id = sender_id OR id = receiver_id
-        )
-    );
-
-CREATE POLICY "Staff can insert messages" ON messages
-    FOR INSERT WITH CHECK (
-        restaurant_id IN (
-            SELECT restaurant_id FROM staff WHERE user_id = auth.uid()
-        )
-    );
-
--- ============================================
--- 2.11 OTP CODES POLICIES
--- ============================================
-CREATE POLICY "Service role full access" ON otp_codes
-    FOR ALL
-    USING (true)
-    WITH CHECK (true);
-
-
--- ============================================
--- SECTION 3: TRIGGERS
+-- SECTION 5: TRIGGERS (Safe to re-run)
 -- ============================================
 
--- Updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -445,34 +453,37 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Apply triggers to tables with updated_at
-CREATE TRIGGER update_restaurants_updated_at BEFORE UPDATE ON restaurants
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- Drop existing triggers first
+DROP TRIGGER IF EXISTS update_restaurants_updated_at ON restaurants;
+DROP TRIGGER IF EXISTS update_staff_updated_at ON staff;
+DROP TRIGGER IF EXISTS update_categories_updated_at ON categories;
+DROP TRIGGER IF EXISTS update_menu_items_updated_at ON menu_items;
+DROP TRIGGER IF EXISTS update_tables_updated_at ON tables;
+DROP TRIGGER IF EXISTS update_orders_updated_at ON orders;
+DROP TRIGGER IF EXISTS update_split_payments_updated_at ON split_payments;
+DROP TRIGGER IF EXISTS update_inventory_updated_at ON inventory;
+DROP TRIGGER IF EXISTS update_reservations_updated_at ON reservations;
+DROP TRIGGER IF EXISTS update_loyalty_members_updated_at ON loyalty_members;
+DROP TRIGGER IF EXISTS update_shifts_updated_at ON shifts;
 
-CREATE TRIGGER update_staff_updated_at BEFORE UPDATE ON staff
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_categories_updated_at BEFORE UPDATE ON categories
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_menu_items_updated_at BEFORE UPDATE ON menu_items
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_tables_updated_at BEFORE UPDATE ON tables
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON orders
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_split_payments_updated_at BEFORE UPDATE ON split_payments
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
+-- Create triggers
+CREATE TRIGGER update_restaurants_updated_at BEFORE UPDATE ON restaurants FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_staff_updated_at BEFORE UPDATE ON staff FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_categories_updated_at BEFORE UPDATE ON categories FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_menu_items_updated_at BEFORE UPDATE ON menu_items FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_tables_updated_at BEFORE UPDATE ON tables FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_split_payments_updated_at BEFORE UPDATE ON split_payments FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_inventory_updated_at BEFORE UPDATE ON inventory FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_reservations_updated_at BEFORE UPDATE ON reservations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_loyalty_members_updated_at BEFORE UPDATE ON loyalty_members FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_shifts_updated_at BEFORE UPDATE ON shifts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================
--- SECTION 4: HELPER FUNCTIONS
+-- SECTION 6: HELPER FUNCTIONS
 -- ============================================
 
--- Function to calculate order totals
+-- Calculate order totals
 CREATE OR REPLACE FUNCTION calculate_order_total(order_uuid UUID)
 RETURNS VOID AS $$
 DECLARE
@@ -481,100 +492,38 @@ DECLARE
     v_tax DECIMAL(10,2);
     v_discount DECIMAL(10,2);
 BEGIN
-    SELECT COALESCE(SUM(subtotal), 0) INTO v_subtotal
-    FROM order_items WHERE order_id = order_uuid;
-    
-    SELECT r.tax_rate, o.discount INTO v_tax_rate, v_discount
-    FROM orders o
-    JOIN restaurants r ON o.restaurant_id = r.id
-    WHERE o.id = order_uuid;
-    
+    SELECT COALESCE(SUM(subtotal), 0) INTO v_subtotal FROM order_items WHERE order_id = order_uuid;
+    SELECT r.tax_rate, o.discount INTO v_tax_rate, v_discount FROM orders o JOIN restaurants r ON o.restaurant_id = r.id WHERE o.id = order_uuid;
     v_tax := (v_subtotal - COALESCE(v_discount, 0)) * (v_tax_rate / 100);
-    
-    UPDATE orders SET
-        subtotal = v_subtotal,
-        tax = v_tax,
-        total = v_subtotal + v_tax - COALESCE(v_discount, 0),
-        updated_at = NOW()
-    WHERE id = order_uuid;
+    UPDATE orders SET subtotal = v_subtotal, tax = v_tax, total = v_subtotal + v_tax - COALESCE(v_discount, 0), updated_at = NOW() WHERE id = order_uuid;
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to verify staff PIN (for staff login)
-CREATE OR REPLACE FUNCTION verify_staff_pin(
-    p_restaurant_slug TEXT,
-    p_pin TEXT
-) RETURNS TABLE (
-    staff_id UUID,
-    restaurant_id UUID,
-    staff_name TEXT,
-    staff_role TEXT,
-    restaurant_name TEXT
-) AS $$
+-- Verify staff PIN
+CREATE OR REPLACE FUNCTION verify_staff_pin(p_restaurant_slug TEXT, p_pin TEXT)
+RETURNS TABLE (staff_id UUID, restaurant_id UUID, staff_name TEXT, staff_role TEXT, restaurant_name TEXT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT 
-        s.id,
-        s.restaurant_id,
-        s.name,
-        s.role::TEXT,
-        r.name
-    FROM staff s
-    JOIN restaurants r ON r.id = s.restaurant_id
-    WHERE r.slug = p_restaurant_slug
-    AND s.pin = p_pin
-    AND s.is_active = true
+    SELECT s.id, s.restaurant_id, s.name, s.role::TEXT, r.name
+    FROM staff s JOIN restaurants r ON r.id = s.restaurant_id
+    WHERE r.slug = p_restaurant_slug AND s.pin = crypt(p_pin, s.pin) AND s.is_active = true
     LIMIT 1;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-
--- ============================================
--- SECTION 5: REALTIME CONFIGURATION
--- ============================================
-
--- NOTE: Enable realtime in Supabase Dashboard:
--- Go to Database > Replication > Enable for:
---   - orders
---   - order_items
---   - tables
---   - messages
-
-
--- ============================================
--- SECTION 6: SAMPLE DATA (Optional)
--- ============================================
-
--- Uncomment to add sample data for testing
-/*
--- Sample categories
-INSERT INTO categories (restaurant_id, name, description, display_order) VALUES
-    ('YOUR_RESTAURANT_ID', 'Starters', 'Appetizers and small bites', 1),
-    ('YOUR_RESTAURANT_ID', 'Main Course', 'Signature dishes', 2),
-    ('YOUR_RESTAURANT_ID', 'Drinks', 'Beverages and refreshments', 3),
-    ('YOUR_RESTAURANT_ID', 'Desserts', 'Sweet endings', 4);
-
--- Sample tables
-INSERT INTO tables (restaurant_id, table_number, capacity) VALUES
-    ('YOUR_RESTAURANT_ID', '1', 4),
-    ('YOUR_RESTAURANT_ID', '2', 2),
-    ('YOUR_RESTAURANT_ID', '3', 6),
-    ('YOUR_RESTAURANT_ID', '4', 4),
-    ('YOUR_RESTAURANT_ID', '5', 8);
-
--- Sample staff
-INSERT INTO staff (restaurant_id, name, email, pin, role) VALUES
-    ('YOUR_RESTAURANT_ID', 'John Waiter', 'john@example.com', '1234', 'waiter'),
-    ('YOUR_RESTAURANT_ID', 'Chef Ali', 'ali@example.com', '5678', 'kitchen'),
-    ('YOUR_RESTAURANT_ID', 'Sara Manager', 'sara@example.com', '9999', 'manager');
-*/
-
+-- Increment discount usage
+CREATE OR REPLACE FUNCTION increment_discount_usage(discount_id UUID)
+RETURNS VOID AS $$
+BEGIN
+    UPDATE discount_codes SET times_used = times_used + 1 WHERE id = discount_id;
+END;
+$$ LANGUAGE plpgsql;
 
 -- ============================================
 -- MIGRATION COMPLETE
 -- ============================================
--- Tables created: 11
--- RLS Policies: 22
--- Triggers: 7
+-- Tables: 20
+-- RLS Policies: 20  
+-- Triggers: 11
 -- Functions: 3
 -- ============================================

@@ -54,26 +54,27 @@ export default function StaffPage() {
     const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null)
 
     // Fetch staff from Supabase
-    useEffect(() => {
-        async function loadStaff() {
-            if (!restaurant?.id) return
-            setIsLoading(true)
-            try {
-                const supabase = createClient()
-                const { data, error } = await supabase
-                    .from('staff')
-                    .select('*')
-                    .eq('restaurant_id', restaurant.id)
-                    .order('name')
+    const loadStaff = async () => {
+        if (!restaurant?.id) return
+        setIsLoading(true)
+        try {
+            const supabase = createClient()
+            const { data, error } = await supabase
+                .from('staff')
+                .select('*')
+                .eq('restaurant_id', restaurant.id)
+                .order('name')
 
-                if (error) throw error
-                setStaff(data || [])
-            } catch (err) {
-                showError('Error', 'Failed to load staff')
-            } finally {
-                setIsLoading(false)
-            }
+            if (error) throw error
+            setStaff(data || [])
+        } catch (err) {
+            showError('Error', 'Failed to load staff')
+        } finally {
+            setIsLoading(false)
         }
+    }
+
+    useEffect(() => {
         loadStaff()
     }, [restaurant?.id])
 
@@ -341,7 +342,8 @@ export default function StaffPage() {
             <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingStaff(null); }} title={editingStaff ? 'Edit Staff Member' : 'Add New Staff Member'} size="md">
                 <StaffForm
                     staff={editingStaff}
-                    onSuccess={() => { setShowModal(false); setEditingStaff(null); }}
+                    restaurantId={restaurant?.id || ''}
+                    onSuccess={() => { setShowModal(false); setEditingStaff(null); loadStaff(); }}
                     onCancel={() => { setShowModal(false); setEditingStaff(null); }}
                 />
             </Modal>
@@ -349,97 +351,183 @@ export default function StaffPage() {
     )
 }
 
-function StaffForm({ staff, onSuccess, onCancel }: any) {
+function StaffForm({ staff, restaurantId, onSuccess, onCancel }: { staff: StaffMember | null, restaurantId: string, onSuccess: () => void, onCancel: () => void }) {
+    const { success, error: showError } = useToast()
     const [isLoading, setIsLoading] = useState(false)
+    const [tempPinResult, setTempPinResult] = useState<string | null>(null)
     const [formData, setFormData] = useState({
         name: staff?.name || '',
         email: staff?.email || '',
         role: staff?.role || 'waiter',
-        pin: staff?.pin || '',
     })
 
     const handleSubmit = async (e: any) => {
         e.preventDefault()
+        if (!restaurantId) {
+            showError('Error', 'Restaurant context not found')
+            return
+        }
+
         setIsLoading(true)
-        await new Promise(r => setTimeout(r, 800))
-        setIsLoading(false)
-        onSuccess()
+        try {
+            if (staff) {
+                // Update existing staff
+                const supabase = createClient()
+                const { error } = await supabase
+                    .from('staff')
+                    .update({
+                        name: formData.name,
+                        email: formData.email || null,
+                        role: formData.role,
+                    })
+                    .eq('id', staff.id)
+
+                if (error) throw error
+                success('Staff Updated', `${formData.name} has been updated.`)
+                onSuccess()
+            } else {
+                // Invite new staff via API
+                const response = await fetch('/api/staff/invite', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: formData.name,
+                        email: formData.email,
+                        role: formData.role,
+                        restaurantId,
+                    }),
+                })
+
+                const result = await response.json()
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'Failed to invite staff')
+                }
+
+                // Show temp PIN to admin
+                setTempPinResult(result.tempPin)
+                success('Staff Invited!', `Share the PIN with ${formData.name}`)
+            }
+        } catch (err: any) {
+            showError('Error', err.message || 'Failed to save staff member')
+        } finally {
+            setIsLoading(false)
+        }
+    }
+
+    // Show temp PIN result screen
+    if (tempPinResult) {
+        return (
+            <div className="space-y-8 text-center py-4">
+                <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                    <Check className="w-10 h-10 text-emerald-500" />
+                </div>
+
+                <div>
+                    <h3 className="text-xl font-bold text-white mb-2">Staff Invited!</h3>
+                    <p className="text-sm text-neutral-500">Share this temporary PIN with <span className="text-white font-bold">{formData.name}</span></p>
+                </div>
+
+                <div className="p-6 bg-neutral-900 border border-neutral-800 rounded-3xl">
+                    <p className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest mb-3">Temporary PIN</p>
+                    <p className="text-4xl font-black text-orange-500 tracking-[0.3em]">{tempPinResult}</p>
+                </div>
+
+                <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-left">
+                    <p className="text-xs font-medium text-amber-400">
+                        <strong>Important:</strong> The staff member should go to <span className="text-white">/staff-login</span>, enter their email and this PIN to complete their account setup.
+                    </p>
+                </div>
+
+                <button
+                    onClick={() => { setTempPinResult(null); onSuccess(); }}
+                    className="w-full h-14 rounded-2xl font-bold uppercase text-sm tracking-widest bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-all"
+                >
+                    Done
+                </button>
+            </div>
+        )
     }
 
     return (
-        <form onSubmit={handleSubmit} className="space-y-8 p-2">
+        <form onSubmit={handleSubmit} className="space-y-8">
             <div className="space-y-6">
-                <Input
-                    label="Full Name"
-                    value={formData.name}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="Enter full name"
-                    required
-                    icon={User}
-                    className="h-14 bg-black border-neutral-800 text-white font-bold tracking-wide"
-                />
-                <Input
-                    label="Email Address"
-                    type="email"
-                    value={formData.email}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, email: e.target.value })}
-                    placeholder="email@restaurant.com"
-                    required
-                    icon={Mail}
-                    className="h-14 bg-black border-neutral-800 text-white font-bold tracking-wide"
-                />
-
+                {/* Information Section */}
                 <div className="space-y-4">
-                    <label className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest">User Role</label>
-                    <div className="grid grid-cols-2 gap-3">
-                        {(['waiter', 'kitchen', 'manager'] as const).map((role) => (
+                    <Input
+                        label="Full Name"
+                        value={formData.name}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, name: e.target.value })}
+                        placeholder="e.g. John Doe"
+                        required
+                        icon={User}
+                        className="h-14 bg-neutral-900 shadow-inner border-neutral-800 text-white font-bold tracking-wide"
+                    />
+                    <Input
+                        label="Email Address"
+                        type="email"
+                        value={formData.email}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, email: e.target.value })}
+                        placeholder="john@restaurant.com"
+                        required
+                        icon={Mail}
+                        className="h-14 bg-neutral-900 shadow-inner border-neutral-800 text-white font-bold tracking-wide"
+                    />
+                </div>
+
+                {/* Role Selection */}
+                <div className="space-y-4">
+                    <label className="text-[10px] font-bold text-neutral-600 uppercase tracking-[0.2em]">Department / User Role</label>
+                    <div className="grid grid-cols-5 gap-2">
+                        {(['waiter', 'kitchen', 'cashier', 'delivery', 'manager'] as const).map((role) => (
                             <button
                                 key={role}
                                 type="button"
                                 onClick={() => setFormData({ ...formData, role })}
                                 className={cn(
-                                    'h-12 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all border',
+                                    'h-14 rounded-xl text-[8px] font-black uppercase tracking-wider transition-all border flex flex-col items-center justify-center gap-1',
                                     formData.role === role
-                                        ? 'bg-orange-600 text-white border-orange-600 shadow-lg'
-                                        : 'bg-black text-neutral-500 border-neutral-800 hover:border-neutral-700 hover:text-white'
+                                        ? 'bg-orange-600 border-none text-white shadow-lg shadow-orange-600/30 active:scale-95'
+                                        : 'bg-neutral-900 border-neutral-800 text-neutral-500 hover:border-neutral-700 hover:text-neutral-300'
                                 )}
                             >
+                                <span className="opacity-80">{role === 'waiter' ? <Utensils className="w-3.5 h-3.5" /> : role === 'kitchen' ? <ChefHat className="w-3.5 h-3.5" /> : role === 'cashier' ? <Lock className="w-3.5 h-3.5" /> : role === 'delivery' ? <User className="w-3.5 h-3.5" /> : <Shield className="w-3.5 h-3.5" />}</span>
                                 {roleConfig[role].label}
                             </button>
                         ))}
                     </div>
                 </div>
 
-                <Input
-                    label="Login PIN (4-Digits)"
-                    type="password"
-                    value={formData.pin}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, pin: e.target.value })}
-                    placeholder="••••"
-                    required
-                    icon={Lock}
-                    maxLength={4}
-                    className="h-14 bg-black border-neutral-800 text-white font-bold tracking-widest text-center"
-                />
+                {/* Info about invitation */}
+                {!staff && (
+                    <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-2xl">
+                        <p className="text-xs font-medium text-blue-400">
+                            A temporary PIN will be generated for the staff member. Share it with them to complete their account setup.
+                        </p>
+                    </div>
+                )}
             </div>
 
-            <div className="flex gap-4 pt-4">
-                <Button
-                    variant="outline"
-                    className="h-16 flex-1 border-neutral-800 text-neutral-500 font-bold uppercase tracking-widest hover:border-white hover:text-white transition-all"
-                    onClick={onCancel}
+            {/* Actions */}
+            <div className="grid grid-cols-2 gap-4 pb-2">
+                <button
                     type="button"
+                    onClick={onCancel}
+                    className="h-16 rounded-[1.5rem] border border-neutral-800 text-neutral-500 font-black uppercase tracking-[0.2em] text-[10px] hover:border-white hover:text-white transition-all bg-transparent"
                 >
                     Cancel
-                </Button>
-                <Button
-                    variant="primary"
-                    className="h-16 flex-1 bg-orange-600 hover:bg-orange-500 text-white shadow-xl font-bold uppercase tracking-widest border-none"
-                    isLoading={isLoading}
+                </button>
+                <button
                     type="submit"
+                    disabled={isLoading}
+                    className="h-16 rounded-[1.5rem] bg-orange-600 hover:bg-orange-500 text-white shadow-2xl shadow-orange-600/30 border-none font-black uppercase tracking-[0.2em] text-[10px] disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                    {staff ? 'Save Changes' : 'Add Member'}
-                </Button>
+                    {isLoading ? (
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                        staff ? 'Update Staff' : 'Send Invitation'
+                    )}
+                </button>
             </div>
         </form>
     )

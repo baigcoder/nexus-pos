@@ -53,21 +53,41 @@ export async function updateSession(request: NextRequest) {
     const pathname = request.nextUrl.pathname
 
     // Define public routes that don't require authentication
-    const publicRoutes = ['/', '/login', '/register', '/menu', '/auth/callback', '/demo', '/verify-otp', '/forgot-password']
+    const publicRoutes = ['/', '/login', '/register', '/menu', '/auth/callback', '/demo', '/verify-otp', '/forgot-password', '/staff-login', '/staff-setup', '/screen-login']
     const isPublicRoute = publicRoutes.some(route =>
         pathname === route ||
         pathname.startsWith('/menu/') ||
         pathname.startsWith('/track/') ||
-        pathname.startsWith('/order/')
+        pathname.startsWith('/order/') ||
+        pathname.startsWith('/api/') ||  // All API routes are public (they handle their own auth)
+        pathname.startsWith('/display/')  // Public display pages
     )
 
     // Staff-only routes (PIN-based auth, check is handled by client-side store)
-    const staffPinRoutes = ['/dashboard/kitchen', '/dashboard/orders', '/waiter', '/dashboard/billing']
+    // All dashboard routes are accessible - client-side auth will verify
+    const staffPinRoutes = [
+        '/dashboard/kitchen',
+        '/dashboard/orders',
+        '/dashboard/billing',
+        '/dashboard/waiter',
+        '/dashboard/tables',
+        '/dashboard/menu',
+        '/dashboard/take-order',
+        '/dashboard/my-orders',
+        '/dashboard/kitchen-view',
+        '/dashboard/my-shift',
+        '/dashboard/tips',
+        '/dashboard/cashier',
+        '/dashboard/riders',
+        '/dashboard/deliveries',
+        '/dashboard/delivery-boy',
+        '/dashboard/delivery-monitor',
+    ]
 
     if (!user && !isPublicRoute) {
-        // Allow staff routes to be accessed if there's a staff session in local storage
-        // This is a simplified check; full verification happens client-side
-        const isStaffRoute = staffPinRoutes.some(route => pathname.startsWith(route))
+        // Allow ALL dashboard routes to be accessed - staff uses PIN-based auth stored client-side
+        // Full verification happens in the client-side auth store
+        const isStaffRoute = pathname.startsWith('/dashboard')
 
         // For staff routes, we check client-side auth (PIN-based), so let middleware pass
         // The client-side check will redirect if needed

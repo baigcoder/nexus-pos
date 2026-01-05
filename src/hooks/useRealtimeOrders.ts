@@ -1,5 +1,5 @@
 // React hooks for real-time data subscriptions
-import { useEffect, useCallback, useRef } from 'react'
+import { useEffect, useCallback, useRef, useState } from 'react'
 import { useOrderStore } from '@/stores'
 import { useAuthStore } from '@/stores'
 import { subscribeToOrders, subscribeToTables, unsubscribe } from '@/lib/supabase/realtime'
@@ -15,12 +15,16 @@ export function useRealtimeOrders(statusFilter?: OrderStatus | OrderStatus[]) {
     const { restaurant } = useAuthStore()
     const { activeOrders, setActiveOrders, addOrder, updateOrderStatus, removeOrder } = useOrderStore()
     const channelRef = useRef<RealtimeChannel | null>(null)
-    const initialLoadDone = useRef(false)
+    const [isLoading, setIsLoading] = useState(true)
 
     // Fetch initial orders
     const loadOrders = useCallback(async () => {
-        if (!restaurant?.id) return
+        if (!restaurant?.id) {
+            setIsLoading(false)
+            return
+        }
 
+        setIsLoading(true)
         const result = await fetchOrders(restaurant.id)
         if (result.success && result.data) {
             let orders = result.data
@@ -33,7 +37,7 @@ export function useRealtimeOrders(statusFilter?: OrderStatus | OrderStatus[]) {
 
             setActiveOrders(orders)
         }
-        initialLoadDone.current = true
+        setIsLoading(false)
     }, [restaurant?.id, statusFilter, setActiveOrders])
 
     // Handle new order
@@ -67,7 +71,10 @@ export function useRealtimeOrders(statusFilter?: OrderStatus | OrderStatus[]) {
 
     // Subscribe to realtime updates
     useEffect(() => {
-        if (!restaurant?.id) return
+        if (!restaurant?.id) {
+            setIsLoading(false)
+            return
+        }
 
         // Initial load
         loadOrders()
@@ -100,7 +107,7 @@ export function useRealtimeOrders(statusFilter?: OrderStatus | OrderStatus[]) {
 
     return {
         orders: filteredOrders,
-        isLoading: !initialLoadDone.current,
+        isLoading,
         refresh: loadOrders,
     }
 }

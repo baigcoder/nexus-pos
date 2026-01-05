@@ -88,7 +88,7 @@ const mockOrders: AssignedOrder[] = [
 ]
 
 export default function DeliveryBoyPage() {
-    const { user, restaurant } = useAuthStore()
+    const { staff, restaurant } = useAuthStore()
     const { success, error: showError } = useToast()
     const [isLoading, setIsLoading] = useState(true)
     const [orders, setOrders] = useState<AssignedOrder[]>(mockOrders)
@@ -113,25 +113,66 @@ export default function DeliveryBoyPage() {
         completed: orders.filter(o => o.status === 'delivered').length,
     }), [orders])
 
-    // Start GPS tracking
-    const startTracking = () => {
+    // Start GPS tracking and send updates to backend
+    const startTracking = (orderId?: string) => {
+        if (!staff?.id) {
+            showError('Error', 'Staff ID not found')
+            return
+        }
+
         if (navigator.geolocation) {
             setIsTracking(true)
-            navigator.geolocation.watchPosition(
-                (position) => {
-                    setCurrentLocation({
+
+            const watchId = navigator.geolocation.watchPosition(
+                async (position) => {
+                    const location = {
                         lat: position.coords.latitude,
                         lng: position.coords.longitude,
-                    })
-                    // In production: Send to Supabase for customer tracking
+                    }
+                    setCurrentLocation(location)
+
+                    // Send location update to backend
+                    try {
+                        await fetch('/api/delivery/location', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                rider_id: staff.id,
+                                latitude: location.lat,
+                                longitude: location.lng,
+                                accuracy: position.coords.accuracy,
+                                heading: position.coords.heading,
+                                speed: position.coords.speed ? position.coords.speed * 3.6 : null, // m/s to km/h
+                                order_id: orderId,
+                            }),
+                        })
+                    } catch (err) {
+                        console.error('Failed to send location:', err)
+                    }
                 },
                 (error) => {
-                    showError('GPS Error', 'Could not get your location')
+                    console.error('GPS Error:', error)
+                    showError('GPS Error', 'Could not get your location. Please enable location access.')
                     setIsTracking(false)
                 },
-                { enableHighAccuracy: true, maximumAge: 10000 }
+                {
+                    enableHighAccuracy: true,
+                    maximumAge: 5000, // 5 seconds
+                    timeout: 10000
+                }
             )
+
+            // Store watch ID to clear later
+            return watchId
+        } else {
+            showError('GPS Not Available', 'Your device does not support GPS tracking')
         }
+    }
+
+    // Stop tracking
+    const stopTracking = () => {
+        setIsTracking(false)
+        setCurrentLocation(null)
     }
 
     const updateOrderStatus = (orderId: string, newStatus: DeliveryStatus) => {
@@ -184,7 +225,7 @@ export default function DeliveryBoyPage() {
                             My <span className="text-cyan-500">Deliveries</span>
                         </motion.h1>
                         <motion.p variants={itemVariant} className="text-neutral-500 text-lg font-medium">
-                            Welcome back, {user?.email?.split('@')[0] || 'Driver'}
+                            Welcome back, {staff?.name || 'Driver'}
                         </motion.p>
                     </div>
 
@@ -287,7 +328,7 @@ export default function DeliveryBoyPage() {
                                 const StatusIcon = statusCfg.icon
 
                                 return (
-                                    <motion.div key={order.id} variants={itemVariant} layout>
+                                    <motion.div key={order.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} layout>
                                         <Card className="p-0 bg-neutral-950 border-neutral-900 hover:border-neutral-800 transition-all rounded-[2rem] overflow-hidden">
                                             {/* Order Header */}
                                             <div className="p-6 border-b border-neutral-900 flex items-center gap-6">

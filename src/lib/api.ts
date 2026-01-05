@@ -1,39 +1,68 @@
 // API utility functions for consistent error handling and data fetching
 import { createClient } from '@/lib/supabase/client'
 import type { Category, MenuItem, Order, Table, Restaurant } from '@/types'
+import {
+    withCache,
+    withRetry,
+    createCacheKey,
+    apiCache,
+    handleApiError
+} from './api-utils'
 
 // Generic API response type
 export type ApiResponse<T> = {
     data: T | null
     error: string | null
+    errorCode?: string
     success: boolean
 }
 
+// Cache TTL configurations (in milliseconds)
+const CACHE_TTL = {
+    CATEGORIES: 60000,    // 1 minute
+    MENU_ITEMS: 60000,    // 1 minute  
+    TABLES: 30000,        // 30 seconds
+    ORDERS: 10000,        // 10 seconds (more volatile)
+    RESTAURANT: 300000,   // 5 minutes
+}
+
 // Helper to handle Supabase errors
-function handleError(error: unknown): string {
-    if (error instanceof Error) return error.message
-    if (typeof error === 'string') return error
-    return 'An unexpected error occurred'
+function handleError(error: unknown): { message: string; code: string } {
+    return handleApiError(error)
 }
 
 // ============================================
 // CATEGORY API
 // ============================================
 
-export async function fetchCategories(restaurantId: string): Promise<ApiResponse<Category[]>> {
-    try {
-        const supabase = createClient()
-        const { data, error } = await supabase
-            .from('categories')
-            .select('*')
-            .eq('restaurant_id', restaurantId)
-            .order('display_order', { ascending: true })
+export async function fetchCategories(
+    restaurantId: string,
+    options?: { forceRefresh?: boolean }
+): Promise<ApiResponse<Category[]>> {
+    const cacheKey = createCacheKey('categories', restaurantId)
 
-        if (error) throw error
-        return { data, error: null, success: true }
-    } catch (error) {
-        return { data: null, error: handleError(error), success: false }
-    }
+    return withCache(
+        cacheKey,
+        async () => {
+            try {
+                const supabase = createClient()
+                const { data, error } = await withRetry(async () =>
+                    supabase
+                        .from('categories')
+                        .select('*')
+                        .eq('restaurant_id', restaurantId)
+                        .order('display_order', { ascending: true })
+                )
+
+                if (error) throw error
+                return { data, error: null, success: true }
+            } catch (error) {
+                const { message, code } = handleError(error)
+                return { data: null, error: message, errorCode: code, success: false }
+            }
+        },
+        { ttl: CACHE_TTL.CATEGORIES, forceRefresh: options?.forceRefresh }
+    )
 }
 
 export async function createCategory(
@@ -55,9 +84,12 @@ export async function createCategory(
             .single()
 
         if (error) throw error
+        // Invalidate cache after create
+        apiCache.invalidateByPrefix('categories')
         return { data: category, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -75,9 +107,12 @@ export async function updateCategory(
             .single()
 
         if (error) throw error
+        // Invalidate categories cache after update
+        apiCache.invalidateByPrefix('categories')
         return { data: category, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -90,9 +125,12 @@ export async function deleteCategory(categoryId: string): Promise<ApiResponse<nu
             .eq('id', categoryId)
 
         if (error) throw error
+        // Invalidate categories cache after delete
+        apiCache.invalidateByPrefix('categories')
         return { data: null, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -112,7 +150,8 @@ export async function fetchMenuItems(categoryId: string): Promise<ApiResponse<Me
         if (error) throw error
         return { data, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -129,7 +168,8 @@ export async function fetchAllMenuItems(restaurantId: string): Promise<ApiRespon
         if (error) throw error
         return { data, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -164,9 +204,12 @@ export async function createMenuItem(
             .single()
 
         if (error) throw error
+        // Invalidate menu items cache
+        apiCache.invalidateByPrefix('menu_items')
         return { data: item, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -184,9 +227,12 @@ export async function updateMenuItem(
             .single()
 
         if (error) throw error
+        // Invalidate menu items cache
+        apiCache.invalidateByPrefix('menu_items')
         return { data: item, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -199,9 +245,12 @@ export async function deleteMenuItem(itemId: string): Promise<ApiResponse<null>>
             .eq('id', itemId)
 
         if (error) throw error
+        // Invalidate menu items cache
+        apiCache.invalidateByPrefix('menu_items')
         return { data: null, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -221,7 +270,8 @@ export async function fetchTables(restaurantId: string): Promise<ApiResponse<Tab
         if (error) throw error
         return { data, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -244,9 +294,12 @@ export async function createTable(
             .single()
 
         if (error) throw error
+        // Invalidate tables cache
+        apiCache.invalidateByPrefix('tables')
         return { data: table, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -264,9 +317,12 @@ export async function updateTableStatus(
             .single()
 
         if (error) throw error
+        // Invalidate tables cache
+        apiCache.invalidateByPrefix('tables')
         return { data: table, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -299,7 +355,8 @@ export async function fetchOrders(
         if (error) throw error
         return { data, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -372,7 +429,8 @@ export async function createOrder(
 
         return { data: order, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -390,9 +448,12 @@ export async function updateOrderStatus(
             .single()
 
         if (error) throw error
+        // Invalidate orders cache
+        apiCache.invalidateByPrefix('orders')
         return { data: order, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -412,7 +473,8 @@ export async function fetchRestaurant(userId: string): Promise<ApiResponse<Resta
         if (error) throw error
         return { data, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }
 
@@ -430,8 +492,11 @@ export async function updateRestaurant(
             .single()
 
         if (error) throw error
+        // Invalidate restaurant cache
+        apiCache.invalidateByPrefix('restaurant')
         return { data: restaurant, error: null, success: true }
     } catch (error) {
-        return { data: null, error: handleError(error), success: false }
+        const { message, code } = handleError(error)
+        return { data: null, error: message, errorCode: code, success: false }
     }
 }

@@ -153,3 +153,81 @@ export const useOrderStore = create<OrderState>((set, get) => ({
         return cart.reduce((count, item) => count + item.quantity, 0)
     },
 }))
+
+// ============================================
+// COMPUTED SELECTORS
+// Efficient selectors that only recompute when necessary
+// ============================================
+
+// Get orders by specific status
+export const useOrdersByStatus = (status: OrderStatus) =>
+    useOrderStore((state) => state.activeOrders.filter((o) => o.status === status))
+
+// Get count of pending orders
+export const usePendingOrdersCount = () =>
+    useOrderStore((state) => state.activeOrders.filter((o) => o.status === 'pending').length)
+
+// Get count of preparing orders  
+export const usePreparingOrdersCount = () =>
+    useOrderStore((state) => state.activeOrders.filter((o) => o.status === 'preparing').length)
+
+// Get count of ready orders
+export const useReadyOrdersCount = () =>
+    useOrderStore((state) => state.activeOrders.filter((o) => o.status === 'ready').length)
+
+// Get cart with computed totals
+export const useCartWithTotals = () =>
+    useOrderStore((state) => ({
+        items: state.cart,
+        total: state.getCartTotal(),
+        itemCount: state.getCartItemCount(),
+        tableId: state.currentTableId,
+        notes: state.orderNotes,
+    }))
+
+// Check if cart is empty
+export const useIsCartEmpty = () =>
+    useOrderStore((state) => state.cart.length === 0)
+
+// Get cart item by menu item id
+export const useCartItem = (menuItemId: string) =>
+    useOrderStore((state) => state.cart.find((item) => item.menuItem.id === menuItemId))
+
+// Get active orders count
+export const useActiveOrdersCount = () =>
+    useOrderStore((state) => state.activeOrders.length)
+
+// Get orders grouped by status for dashboard
+export const useOrdersGroupedByStatus = () =>
+    useOrderStore((state) => ({
+        pending: state.activeOrders.filter((o) => o.status === 'pending'),
+        preparing: state.activeOrders.filter((o) => o.status === 'preparing'),
+        ready: state.activeOrders.filter((o) => o.status === 'ready'),
+        served: state.activeOrders.filter((o) => o.status === 'served'),
+    }))
+
+// Get priority orders
+export const usePriorityOrders = () =>
+    useOrderStore((state) => state.activeOrders.filter((o) => o.is_priority))
+
+// Cart actions (for easier import)
+export const useCartActions = () =>
+    useOrderStore((state) => ({
+        addToCart: state.addToCart,
+        updateCartItemQuantity: state.updateCartItemQuantity,
+        removeFromCart: state.removeFromCart,
+        updateCartItemInstructions: state.updateCartItemInstructions,
+        setOrderNotes: state.setOrderNotes,
+        clearCart: state.clearCart,
+        setCurrentTable: state.setCurrentTable,
+    }))
+
+// Order actions (for easier import)
+export const useOrderActions = () =>
+    useOrderStore((state) => ({
+        setActiveOrders: state.setActiveOrders,
+        addOrder: state.addOrder,
+        updateOrderStatus: state.updateOrderStatus,
+        updateOrderItemStatus: state.updateOrderItemStatus,
+        removeOrder: state.removeOrder,
+    }))
