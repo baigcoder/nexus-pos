@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, ReactNode } from 'react'
+import { useState, ReactNode, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -28,6 +28,7 @@ import {
     QrCode,
     Clock,
     DollarSign,
+    Tv,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuthStore } from '@/stores'
@@ -46,44 +47,122 @@ const sidebarLinks: Array<{
     label: string
     icon: any
     roles: UserRole[] | 'all'
+    section?: string
 }> = [
-        { href: '/dashboard', label: 'Overview', icon: LayoutDashboard, roles: ['owner', 'manager'] },
-        { href: '/dashboard/waiter', label: 'Waiter Station', icon: Activity, roles: ['waiter'] },
-        { href: '/dashboard/cashier', label: 'Cashier Station', icon: Receipt, roles: ['cashier'] },
-        { href: '/dashboard/menu', label: 'Menu', icon: UtensilsCrossed, roles: ['owner', 'manager'] },
-        { href: '/dashboard/specials', label: 'Specials', icon: Activity, roles: ['owner', 'manager'] },
-        { href: '/dashboard/tables', label: 'Tables', icon: Grid3X3, roles: ['owner', 'manager', 'waiter'] },
-        { href: '/dashboard/orders', label: 'Orders', icon: ClipboardList, roles: ['owner', 'manager', 'waiter', 'cashier'] },
-        { href: '/dashboard/order-desk', label: 'Order Desk', icon: Activity, roles: ['owner', 'manager'] },
-        { href: '/dashboard/riders', label: 'Riders', icon: Truck, roles: ['owner', 'manager'] },
-        { href: '/dashboard/delivery-monitor', label: 'Delivery Monitor', icon: Activity, roles: ['owner', 'manager'] },
-        { href: '/dashboard/delivery-boy', label: 'My Deliveries', icon: Truck, roles: ['delivery'] },
-        { href: '/dashboard/kitchen', label: 'Kitchen', icon: ChefHat, roles: ['owner', 'manager', 'kitchen'] },
-        { href: '/dashboard/billing', label: 'Billing', icon: Receipt, roles: ['owner', 'manager', 'cashier'] },
-        { href: '/dashboard/inventory', label: 'Inventory', icon: ClipboardList, roles: ['owner', 'manager'] },
-        { href: '/dashboard/reservations', label: 'Reservations', icon: Users, roles: ['owner', 'manager'] },
-        { href: '/dashboard/discounts', label: 'Discounts', icon: Receipt, roles: ['owner', 'manager'] },
-        { href: '/dashboard/reports', label: 'Reports', icon: BarChart3, roles: ['owner', 'manager'] },
-        { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3, roles: ['owner', 'manager'] },
-        { href: '/dashboard/staff', label: 'Staff', icon: Users, roles: ['owner', 'manager'] },
-        { href: '/dashboard/staff-performance', label: 'Performance', icon: TrendingUp, roles: ['owner', 'manager'] },
-        { href: '/dashboard/feedback', label: 'Feedback', icon: Star, roles: ['owner', 'manager'] },
-        { href: '/dashboard/loyalty', label: 'Loyalty', icon: Award, roles: ['owner', 'manager'] },
-        { href: '/dashboard/qr-ordering', label: 'QR Codes', icon: QrCode, roles: ['owner', 'manager'] },
-        { href: '/dashboard/shifts', label: 'Shifts', icon: Clock, roles: ['owner', 'manager'] },
-        { href: '/dashboard/expenses', label: 'Expenses', icon: DollarSign, roles: ['owner', 'manager'] },
-        { href: '/dashboard/settings', label: 'Settings', icon: Settings, roles: ['owner', 'manager'] },
+        // Owner/Manager Overview
+        { href: '/dashboard', label: 'Overview', icon: LayoutDashboard, roles: ['owner', 'manager'], section: 'main' },
+
+        // Waiter Features
+        { href: '/dashboard/waiter', label: 'Waiter Station', icon: Activity, roles: ['waiter'], section: 'main' },
+        { href: '/dashboard/menu', label: 'Menu', icon: UtensilsCrossed, roles: ['owner', 'manager', 'waiter', 'cashier'], section: 'main' },
+        { href: '/dashboard/take-order', label: 'Take Order', icon: ClipboardList, roles: ['waiter'], section: 'orders' },
+        { href: '/dashboard/my-orders', label: 'My Orders', icon: ClipboardList, roles: ['waiter', 'kitchen'], section: 'orders' },
+        { href: '/dashboard/tables', label: 'Tables', icon: Grid3X3, roles: ['owner', 'manager', 'waiter', 'cashier'], section: 'main' },
+        { href: '/dashboard/kitchen-view', label: 'Kitchen View', icon: ChefHat, roles: ['waiter'], section: 'orders' },
+
+        // Cashier Features
+        { href: '/dashboard/cashier', label: 'Cashier Station', icon: Receipt, roles: ['cashier'], section: 'main' },
+        { href: '/dashboard/billing', label: 'Billing', icon: Receipt, roles: ['owner', 'manager', 'cashier'], section: 'billing' },
+
+        // Kitchen Features
+        { href: '/dashboard/kitchen', label: 'Kitchen', icon: ChefHat, roles: ['owner', 'manager', 'kitchen'], section: 'main' },
+
+        // Orders & Operations
+        { href: '/dashboard/orders', label: 'Orders', icon: ClipboardList, roles: ['owner', 'manager', 'waiter', 'cashier'], section: 'orders' },
+        { href: '/dashboard/order-desk', label: 'Order Desk', icon: Activity, roles: ['owner', 'manager'], section: 'orders' },
+        { href: '/dashboard/specials', label: 'Specials', icon: Activity, roles: ['owner', 'manager'], section: 'menu' },
+
+        // Delivery
+        { href: '/dashboard/riders', label: 'Riders', icon: Truck, roles: ['owner', 'manager'], section: 'delivery' },
+        { href: '/dashboard/delivery-monitor', label: 'Delivery Monitor', icon: Activity, roles: ['owner', 'manager'], section: 'delivery' },
+        { href: '/dashboard/delivery-boy', label: 'My Deliveries', icon: Truck, roles: ['delivery'], section: 'main' },
+
+        // Staff Tools (All Roles)
+        { href: '/dashboard/my-shift', label: 'My Shift', icon: Clock, roles: ['waiter', 'cashier', 'kitchen', 'delivery'], section: 'staff' },
+        { href: '/dashboard/tips', label: 'Tips', icon: DollarSign, roles: ['waiter', 'delivery', 'cashier'], section: 'staff' },
+
+
+        // Management
+        { href: '/dashboard/inventory', label: 'Inventory', icon: ClipboardList, roles: ['owner', 'manager'], section: 'management' },
+        { href: '/dashboard/reservations', label: 'Reservations', icon: Users, roles: ['owner', 'manager'], section: 'management' },
+        { href: '/dashboard/discounts', label: 'Discounts', icon: Receipt, roles: ['owner', 'manager'], section: 'management' },
+
+        // Analytics & Reports
+        { href: '/dashboard/reports', label: 'Reports', icon: BarChart3, roles: ['owner', 'manager'], section: 'analytics' },
+        { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3, roles: ['owner', 'manager'], section: 'analytics' },
+
+        // Staff Management
+        { href: '/dashboard/staff', label: 'Staff', icon: Users, roles: ['owner', 'manager'], section: 'staff' },
+        { href: '/dashboard/staff-performance', label: 'Performance', icon: TrendingUp, roles: ['owner', 'manager'], section: 'staff' },
+        { href: '/dashboard/shifts', label: 'Shifts', icon: Clock, roles: ['owner', 'manager'], section: 'staff' },
+
+        // Customer
+        { href: '/dashboard/feedback', label: 'Feedback', icon: Star, roles: ['owner', 'manager'], section: 'customer' },
+        { href: '/dashboard/loyalty', label: 'Loyalty', icon: Award, roles: ['owner', 'manager'], section: 'customer' },
+        { href: '/dashboard/qr-ordering', label: 'QR Codes', icon: QrCode, roles: ['owner', 'manager'], section: 'customer' },
+
+        // Finance
+        { href: '/dashboard/expenses', label: 'Expenses', icon: DollarSign, roles: ['owner', 'manager'], section: 'finance' },
+
+        // Settings
+        { href: '/dashboard/display-manager', label: 'Display', icon: Tv, roles: ['owner', 'manager'], section: 'settings' },
+        { href: '/dashboard/settings', label: 'Settings', icon: Settings, roles: ['owner', 'manager'], section: 'settings' },
     ]
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
     const pathname = usePathname()
     const router = useRouter()
     const { success } = useToast()
-    const { user, restaurant, userRole, staff, logout: logoutStore } = useAuthStore()
+    const { user, restaurant, userRole, staff, logout: logoutStore, setRestaurant, setUser, setUserRole } = useAuthStore()
     const [isSidebarOpen, setIsSidebarOpen] = useState(false)
     const [isProfileOpen, setIsProfileOpen] = useState(false)
 
     const effectiveRole: UserRole = userRole || staff?.role || 'owner'
+
+    // Auto-load restaurant if user is logged in but restaurant is not loaded
+    useEffect(() => {
+        const loadRestaurantContext = async () => {
+            // Skip if already loaded or no user
+            if (restaurant || staff) return
+
+            const supabase = createClient()
+            const { data: { user: authUser } } = await supabase.auth.getUser()
+
+            if (!authUser) {
+                router.push('/login')
+                return
+            }
+
+            // Set user if missing
+            if (!user) {
+                // Google Auth stores name in different metadata fields
+                const displayName = authUser.user_metadata?.full_name
+                    || authUser.user_metadata?.name
+                    || authUser.email?.split('@')[0]
+                setUser({
+                    id: authUser.id,
+                    email: authUser.email!,
+                    full_name: displayName,
+                })
+            }
+
+            // Load restaurant for owner
+            const { data: rest } = await supabase
+                .from('restaurants')
+                .select('*')
+                .eq('owner_id', authUser.id)
+                .single()
+
+            if (rest) {
+                setRestaurant(rest)
+                setUserRole('owner')
+            } else {
+                router.push('/setup')
+            }
+        }
+
+        loadRestaurantContext()
+    }, [restaurant, user, staff, router, setRestaurant, setUser, setUserRole])
 
     const filteredLinks = sidebarLinks.filter(link => {
         if (link.roles === 'all') return true
@@ -97,6 +176,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         success('Logged Out', 'You have been successfully logged out.')
         router.push('/login')
     }
+
 
     return (
         <PremiumLayout fullWidth className="flex min-h-screen bg-black overflow-hidden">
@@ -194,10 +274,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                                 className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-neutral-900 transition-all group border border-transparent hover:border-neutral-800"
                             >
                                 <div className="w-9 h-9 rounded-lg bg-white flex items-center justify-center text-neutral-900 font-bold text-xs shadow-lg">
-                                    {staff?.name?.[0] || user?.email?.[0]?.toUpperCase()}
+                                    {(staff?.name?.[0] || user?.full_name?.[0] || user?.email?.[0])?.toUpperCase()}
                                 </div>
                                 <div className="flex-1 text-left min-w-0">
-                                    <p className="text-xs font-bold text-white truncate uppercase tracking-tight">{staff?.name || user?.full_name || 'Admin'}</p>
+                                    <p className="text-xs font-bold text-white truncate uppercase tracking-tight">
+                                        {staff?.name || user?.full_name || user?.email?.split('@')[0] || 'Admin'}
+                                    </p>
                                     <p className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">{effectiveRole}</p>
                                 </div>
                                 <ChevronDown className={cn('w-3 h-3 text-neutral-500 transition-transform group-hover:text-orange-600', isProfileOpen && 'rotate-180')} />
@@ -228,53 +310,72 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
             {/* Content Plane */}
             <div className="flex-1 lg:pl-72 transition-all duration-500 min-h-screen flex flex-col bg-black">
-                {/* Header */}
-                <header className="sticky top-0 z-40 px-8 lg:px-12 py-6 flex items-center justify-between bg-black/80 backdrop-blur-3xl border-b border-neutral-900/50">
-                    <div className="flex items-center gap-6">
+                {/* Header - Show on all pages */}
+                {pathname && (
+                    <header className="sticky top-0 z-40 px-2 lg:px-4 py-6 flex items-center justify-between bg-black/80 backdrop-blur-3xl border-b border-neutral-900/50">
+                        <div className="flex items-center gap-6">
+                            <button
+                                onClick={() => setIsSidebarOpen(true)}
+                                className="lg:hidden w-12 h-12 flex items-center justify-center bg-neutral-900 hover:bg-neutral-800 rounded-2xl transition-colors border border-neutral-800"
+                            >
+                                <Menu className="w-6 h-6 text-white" />
+                            </button>
+
+                            <div className="hidden sm:flex items-center gap-3 px-6 h-14 bg-neutral-950 rounded-2xl border border-neutral-900 shadow-inner group">
+                                <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-glow shadow-emerald-500/50" />
+                                <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest group-hover:text-emerald-500 transition-colors">System Online</span>
+                            </div>
+                        </div>
+
+                        {/* Centered Search */}
+                        <div className="hidden lg:flex flex-1 max-w-2xl px-12">
+                            <div className="relative w-full group">
+                                <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-1/2 text-neutral-600 group-focus-within:text-orange-600 transition-colors" />
+                                <input
+                                    type="text"
+                                    placeholder="Search everything..."
+                                    className="h-14 w-full bg-neutral-950 rounded-2xl pl-16 pr-6 text-[10px] font-bold uppercase tracking-widest outline-none border border-neutral-900 focus:border-orange-600/30 focus:bg-black transition-all text-white placeholder:text-neutral-800 shadow-inner"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-4 lg:gap-6">
+                            <Link href="/dashboard/kitchen">
+                                <Button
+                                    className="bg-white text-neutral-950 hover:bg-orange-600 hover:text-white rounded-2xl h-14 px-8 lg:px-10 font-bold uppercase tracking-widest text-[10px] shadow-lg transition-all border-none"
+                                    icon={ChefHat}
+                                >
+                                    Kitchen
+                                </Button>
+                            </Link>
+
+                            <button className="relative w-14 h-14 flex items-center justify-center bg-neutral-950 hover:bg-neutral-900 rounded-2xl transition-all border border-neutral-900 group shadow-lg">
+                                <Bell className="w-5 h-5 text-neutral-500 group-hover:text-orange-600 transition-colors" />
+                                <span className="absolute top-4 right-4 w-2 h-2 bg-orange-600 rounded-full border-2 border-black shadow-glow shadow-orange-600/50" />
+                            </button>
+                        </div>
+                    </header>
+                )}
+
+                {/* Mobile menu button for non-overview pages */}
+                {pathname !== '/dashboard' && (
+                    <div className="lg:hidden fixed top-4 left-4 z-50">
                         <button
                             onClick={() => setIsSidebarOpen(true)}
-                            className="lg:hidden w-12 h-12 flex items-center justify-center bg-neutral-900 hover:bg-neutral-800 rounded-2xl transition-colors border border-neutral-800"
+                            className="w-12 h-12 flex items-center justify-center bg-neutral-900 hover:bg-neutral-800 rounded-2xl transition-colors border border-neutral-800 shadow-lg"
                         >
                             <Menu className="w-6 h-6 text-white" />
                         </button>
-
-                        <div className="hidden sm:flex items-center gap-3 px-6 h-14 bg-neutral-950 rounded-2xl border border-neutral-900 shadow-inner group">
-                            <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-glow shadow-emerald-500/50" />
-                            <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest group-hover:text-emerald-500 transition-colors">System Online</span>
-                        </div>
                     </div>
+                )}
 
-                    {/* Centered Search */}
-                    <div className="hidden lg:flex flex-1 max-w-2xl px-12">
-                        <div className="relative w-full group">
-                            <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-1/2 text-neutral-600 group-focus-within:text-orange-600 transition-colors" />
-                            <input
-                                type="text"
-                                placeholder="Search everything..."
-                                className="h-14 w-full bg-neutral-950 rounded-2xl pl-16 pr-6 text-[10px] font-bold uppercase tracking-widest outline-none border border-neutral-900 focus:border-orange-600/30 focus:bg-black transition-all text-white placeholder:text-neutral-800 shadow-inner"
-                            />
-                        </div>
-                    </div>
-
-                    <div className="flex items-center gap-4 lg:gap-6">
-                        <Link href="/dashboard/kitchen">
-                            <Button
-                                className="bg-white text-neutral-950 hover:bg-orange-600 hover:text-white rounded-2xl h-14 px-8 lg:px-10 font-bold uppercase tracking-widest text-[10px] shadow-lg transition-all border-none"
-                                icon={ChefHat}
-                            >
-                                Kitchen
-                            </Button>
-                        </Link>
-
-                        <button className="relative w-14 h-14 flex items-center justify-center bg-neutral-950 hover:bg-neutral-900 rounded-2xl transition-all border border-neutral-900 group shadow-lg">
-                            <Bell className="w-5 h-5 text-neutral-500 group-hover:text-orange-600 transition-colors" />
-                            <span className="absolute top-4 right-4 w-2 h-2 bg-orange-600 rounded-full border-2 border-black shadow-glow shadow-orange-600/50" />
-                        </button>
-                    </div>
-                </header>
-
-                <main className="flex-1 px-8 lg:px-12 w-full overflow-x-hidden">
-                    <div className="max-w-[1600px] mx-auto pt-8 pb-20">
+                <main className="flex-1 w-full overflow-x-hidden">
+                    <div className={cn(
+                        "w-full pb-20",
+                        ['/dashboard', '/dashboard/order-desk', '/dashboard/orders', '/dashboard/billing', '/dashboard/tables', '/dashboard/menu'].includes(pathname)
+                            ? "pt-0 px-0"
+                            : "pt-12 lg:pt-16 px-2 lg:px-4"
+                    )}>
                         {children}
                     </div>
                 </main>

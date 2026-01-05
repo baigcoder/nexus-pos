@@ -1,326 +1,368 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
+import { useState, useEffect } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
+    TrendingUp,
+    TrendingDown,
     DollarSign,
     ShoppingBag,
     Users,
     Clock,
-    ArrowRight,
-    ArrowUpRight,
-    ArrowDownRight,
-    TrendingUp,
-    Activity,
-    Zap,
-    Sparkles,
     ChefHat,
-    Receipt
+    Zap,
+    Star,
+    ArrowUpRight,
+    Activity,
+    BadgeCheck,
+    Sparkles,
+    Flame,
+    Crown,
+    Award,
+    Target,
+    Bell,
+    Search,
+    ChevronRight,
+    MousePointer2
 } from 'lucide-react'
-import Link from 'next/link'
+import { Card } from '@/components/ui/common'
 import { useAuthStore } from '@/stores'
-import { Card, Badge, Button } from '@/components/ui/common'
 import { cn } from '@/lib/utils'
 
-// Mock Data (To be replaced with real Supabase data in next step if required)
-const recentOrders = [
-    { id: 1, table: 'Table 3', items: 4, total: 'Rs. 2,450', status: 'preparing', time: '2 min ago' },
-    { id: 2, table: 'Table 7', items: 2, total: 'Rs. 1,200', status: 'ready', time: '5 min ago' },
-    { id: 3, table: 'Table 1', items: 6, total: 'Rs. 4,800', status: 'served', time: '12 min ago' },
-    { id: 4, table: 'Table 5', items: 3, total: 'Rs. 1,850', status: 'preparing', time: '15 min ago' },
-]
-
-const topItems = [
-    { name: 'Truffle Dal Makhani', orders: 23, grow: '+15%' },
-    { name: 'Paneer Tikka', orders: 18, grow: '+12%' },
-    { name: 'Garlic Naan', orders: 45, grow: '+24%' },
-]
+interface DashboardStats {
+    revenue: { value: number; change: number; trend: 'up' | 'down' }
+    orders: { value: number; change: number; trend: 'up' | 'down' }
+    tables: { occupied: number; total: number }
+    avgTime: { value: string; change: number; trend: 'up' | 'down' }
+    efficiency: number
+    topItems: { name: string; count: number; revenue: number }[]
+}
 
 export default function DashboardPage() {
-    const { restaurant, user } = useAuthStore()
-    const [currentTime, setCurrentTime] = useState<string>('')
+    const { user, staff, restaurant } = useAuthStore()
+
+    // Premium Name Formatting
+    const rawName = staff?.name || user?.full_name || user?.email?.split('@')[0] || 'User'
+    const userName = rawName.charAt(0).toUpperCase() + rawName.slice(1).toLowerCase()
+
+    const currentHour = new Date().getHours()
+    const greeting = currentHour < 12 ? 'Morning' : currentHour < 18 ? 'Afternoon' : 'Evening'
+
+    const [stats] = useState<DashboardStats>({
+        revenue: { value: 45600, change: 12.5, trend: 'up' },
+        orders: { value: 47, change: 8.2, trend: 'up' },
+        tables: { occupied: 8, total: 15 },
+        avgTime: { value: '12m', change: 5.4, trend: 'down' },
+        efficiency: 98,
+        topItems: [
+            { name: 'Butter Chicken', count: 24, revenue: 18900 },
+            { name: 'Biryani Special', count: 18, revenue: 14500 },
+            { name: 'Naan Basket', count: 32, revenue: 8600 },
+        ]
+    })
+
+    const [time, setTime] = useState(new Date())
 
     useEffect(() => {
-        const updateTime = () => {
-            setCurrentTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
-        }
-        updateTime()
-        const interval = setInterval(updateTime, 60000)
+        const interval = setInterval(() => setTime(new Date()), 1000)
         return () => clearInterval(interval)
     }, [])
 
-    const container = {
-        hidden: { opacity: 0 },
-        show: {
-            opacity: 1,
-            transition: { staggerChildren: 0.1 }
-        }
-    }
-
-    const itemVariant = {
-        hidden: { opacity: 0, y: 20 },
-        show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 100 } }
-    }
-
     return (
-        <motion.div
-            variants={container}
-            initial="hidden"
-            animate="show"
-            className="space-y-12"
-        >
-            {/* Hero Header Area */}
-            <div className="relative overflow-hidden rounded-[2.5rem] bg-neutral-950 border border-neutral-900 group">
-                <div className="absolute top-0 right-0 w-[50%] h-full bg-gradient-to-l from-orange-600/5 to-transparent pointer-events-none" />
-                <div className="absolute -bottom-24 -right-24 w-96 h-96 bg-orange-600/10 rounded-full blur-[120px] pointer-events-none group-hover:bg-orange-600/20 transition-all duration-1000" />
-
-                <div className="relative z-10 p-10 lg:p-14 flex flex-col lg:flex-row lg:items-center justify-between gap-10">
-                    <div className="space-y-6">
-                        <motion.div variants={itemVariant} className="flex items-center gap-3">
-                            <div className="px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2">
-                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                <span className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em]">Operational</span>
-                            </div>
-                            <div className="h-4 w-[1px] bg-neutral-800" />
-                            <span className="text-xs font-bold text-neutral-500 uppercase tracking-widest">{currentTime}</span>
-                        </motion.div>
-
-                        <div className="space-y-2">
-                            <motion.h1 variants={itemVariant} className="text-4xl lg:text-7xl font-display font-bold text-white tracking-tight leading-[1.1]">
-                                HELLO, <span className="text-orange-600 border-b-4 border-orange-600/30">{user?.full_name?.split(' ')[0] || 'ADMIN'}</span>
-                            </motion.h1>
-                            <motion.p variants={itemVariant} className="text-neutral-500 text-lg lg:text-xl font-medium max-w-xl leading-relaxed">
-                                Here's what's happening at <span className="text-white font-bold">{restaurant?.name || 'Nexus POS'}</span> today.
-                            </motion.p>
-                        </div>
-
-                        <motion.div variants={itemVariant} className="flex flex-wrap items-center gap-4 pt-2">
-                            <Link href="/dashboard/orders">
-                                <Button className="h-16 px-10 bg-orange-600 hover:bg-orange-500 text-white shadow-2xl shadow-orange-600/20 font-bold uppercase tracking-widest text-[10px] rounded-2xl group border-none">
-                                    Process Orders <ArrowRight className="ml-3 w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                                </Button>
-                            </Link>
-                            <Button variant="outline" className="h-16 px-10 border-neutral-800 bg-neutral-950 text-neutral-400 font-bold text-[10px] uppercase tracking-widest rounded-2xl hover:border-white hover:text-white transition-all">
-                                Performance Report
-                            </Button>
-                        </motion.div>
-                    </div>
-
-                    <motion.div variants={itemVariant} className="hidden xl:block">
-                        <div className="flex items-center gap-4">
-                            <div className="p-8 bg-neutral-900/50 backdrop-blur-3xl border border-neutral-800 rounded-[2rem] text-center space-y-2 group/card hover:border-orange-600/30 transition-all duration-500">
-                                <div className="w-14 h-14 rounded-2xl bg-orange-600/10 flex items-center justify-center mx-auto mb-4 text-orange-600 group-hover/card:scale-110 transition-transform">
-                                    <TrendingUp className="w-7 h-7" />
-                                </div>
-                                <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Growth Rate</p>
-                                <h4 className="text-3xl font-black text-white">+12.5%</h4>
-                            </div>
-                            <div className="p-8 bg-neutral-900/50 backdrop-blur-3xl border border-neutral-800 rounded-[2rem] text-center space-y-2 group/card hover:border-orange-600/30 transition-all duration-500">
-                                <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto mb-4 text-emerald-500 group-hover/card:scale-110 transition-transform">
-                                    <Zap className="w-7 h-7" />
-                                </div>
-                                <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Efficiency</p>
-                                <h4 className="text-3xl font-black text-white">98%</h4>
-                            </div>
-                        </div>
-                    </motion.div>
-                </div>
+        <div className="min-h-screen relative overflow-hidden pb-12">
+            {/* Mesh Gradient Background Orbs */}
+            <div className="fixed inset-0 pointer-events-none -z-10 bg-black">
+                <motion.div
+                    animate={{
+                        x: [0, 100, 0],
+                        y: [0, -50, 0],
+                        scale: [1, 1.2, 1]
+                    }}
+                    transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+                    className="absolute -top-[10%] -left-[10%] w-[50%] h-[50%] bg-orange-600/10 blur-[120px] rounded-full"
+                />
+                <motion.div
+                    animate={{
+                        x: [0, -80, 0],
+                        y: [0, 100, 0],
+                        scale: [1, 1.1, 1]
+                    }}
+                    transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
+                    className="absolute top-[20%] -right-[5%] w-[40%] h-[40%] bg-blue-600/5 blur-[100px] rounded-full"
+                />
+                <motion.div
+                    animate={{
+                        scale: [1, 1.3, 1],
+                        opacity: [0.3, 0.5, 0.3]
+                    }}
+                    transition={{ duration: 10, repeat: Infinity, ease: "linear" }}
+                    className="absolute bottom-[10%] left-[20%] w-[30%] h-[30%] bg-purple-600/5 blur-[80px] rounded-full"
+                />
             </div>
 
-            {/* Premium Metrics Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                {[
-                    { label: "Gross Revenue", value: 'Rs. 45.6K', change: 12.5, icon: DollarSign, color: 'text-orange-500', glow: 'shadow-orange-600/10' },
-                    { label: "Active Orders", value: '47', change: 8.2, icon: ShoppingBag, color: 'text-emerald-500', glow: 'shadow-emerald-500/10' },
-                    { label: 'Table Occupancy', value: '08 / 15', change: 2.1, icon: Users, color: 'text-blue-500', glow: 'shadow-blue-500/10' },
-                    { label: 'Avg. Turnaround', value: '12m', change: -4.3, icon: Clock, color: 'text-purple-500', glow: 'shadow-purple-500/10' },
-                ].map((stat) => (
-                    <motion.div key={stat.label} variants={itemVariant}>
-                        <Card className={cn(
-                            "group p-8 bg-neutral-950 border-neutral-900 hover:border-neutral-800 transition-all duration-500 overflow-hidden relative rounded-3xl",
-                            stat.glow
-                        )}>
-                            <div className="absolute top-0 right-0 w-32 h-32 bg-white/[0.01] rounded-full -mr-16 -mt-16 group-hover:scale-110 transition-transform duration-700" />
-                            <div className="relative z-10">
-                                <div className="flex items-center justify-between mb-8">
-                                    <div className="w-12 h-12 rounded-2xl bg-black border border-neutral-800 flex items-center justify-center group-hover:border-neutral-700 transition-colors">
-                                        <stat.icon className={cn("w-5 h-5", stat.color)} />
+            <div className="px-2 lg:px-4 space-y-10 animate-in fade-in duration-700">
+                {/* Header Section: Premium Balance */}
+                <header className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pt-4">
+                    <div className="space-y-4">
+
+
+                        <div className="space-y-1">
+                            <motion.h1
+                                initial={{ opacity: 0, x: -20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                className="text-5xl lg:text-7xl font-black text-white tracking-tight leading-[0.9]"
+                            >
+                                Good {greeting}, <br />
+                                <span className="bg-gradient-to-r from-orange-500 via-amber-400 to-orange-600 bg-clip-text text-transparent">
+                                    {userName}
+                                </span>
+                            </motion.h1>
+                            <p className="text-lg text-neutral-500 font-medium">
+                                {restaurant?.name || 'Restaurant HQ'} is performing <span className="text-orange-500 italic">peak efficiency</span> today.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                        <motion.button
+                            whileHover={{ scale: 1.05, y: -2 }}
+                            whileTap={{ scale: 0.95 }}
+                            className="group relative h-14 px-10 bg-orange-600 rounded-2xl flex items-center gap-3 overflow-hidden shadow-2xl shadow-orange-600/20"
+                        >
+                            <div className="absolute inset-0 bg-gradient-to-r from-orange-400/20 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
+                            <Zap className="w-5 h-5 text-white fill-white" />
+                            <span className="text-sm font-black text-white uppercase tracking-widest">New Order</span>
+                        </motion.button>
+                    </div>
+                </header>
+
+                {/* Primary Stats: Glassmorphism 2.0 */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    {[
+                        {
+                            label: 'Today Revenue',
+                            value: `Rs. ${(stats.revenue.value / 1000).toFixed(1)}k`,
+                            change: stats.revenue.change,
+                            trend: stats.revenue.trend,
+                            icon: DollarSign,
+                            glow: 'group-hover:shadow-orange-500/20',
+                            accent: 'bg-orange-500'
+                        },
+                        {
+                            label: 'Active Orders',
+                            value: stats.orders.value,
+                            change: stats.orders.change,
+                            trend: stats.orders.trend,
+                            icon: ShoppingBag,
+                            glow: 'group-hover:shadow-blue-500/20',
+                            accent: 'bg-blue-500'
+                        },
+                        {
+                            label: 'Table Occupancy',
+                            value: `${stats.tables.occupied}/${stats.tables.total}`,
+                            change: `${Math.round(stats.tables.occupied / stats.tables.total * 100)}%`,
+                            trend: 'up',
+                            icon: Users,
+                            glow: 'group-hover:shadow-purple-500/20',
+                            accent: 'bg-purple-500'
+                        },
+                        {
+                            label: 'Avg Turnaround',
+                            value: stats.avgTime.value,
+                            change: stats.avgTime.change,
+                            trend: stats.avgTime.trend,
+                            icon: Clock,
+                            glow: 'group-hover:shadow-emerald-500/20',
+                            accent: 'bg-emerald-500'
+                        },
+                    ].map((m, i) => (
+                        <motion.div
+                            key={i}
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.1 * i }}
+                            whileHover={{ y: -5 }}
+                            className="group cursor-pointer"
+                        >
+                            <Card className={cn(
+                                "relative overflow-hidden p-6 h-full bg-neutral-900/40 backdrop-blur-xl border border-neutral-800/50 hover:border-neutral-700/80 transition-all duration-300 shadow-xl",
+                                m.glow
+                            )}>
+                                <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-white/5 to-transparent blur-2xl -translate-y-12 translate-x-12" />
+
+                                <div className="flex justify-between items-start mb-6">
+                                    <div className={cn("p-2.5 rounded-xl shadow-inner", m.accent + "/10")}>
+                                        <m.icon className={cn("w-5 h-5", m.accent.replace('bg-', 'text-'))} />
                                     </div>
                                     <div className={cn(
-                                        "px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-tighter flex items-center gap-1",
-                                        stat.change >= 0 ? "text-emerald-500 bg-emerald-500/10" : "text-rose-500 bg-rose-500/10"
+                                        "flex items-center gap-1 text-[10px] font-black tracking-widest px-2 py-1 rounded-lg border",
+                                        m.trend === 'up' ? 'text-emerald-500 border-emerald-500/20 bg-emerald-500/5' : 'text-rose-500 border-rose-500/20 bg-rose-500/5'
                                     )}>
-                                        {stat.change >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                                        {Math.abs(stat.change)}%
+                                        {m.trend === 'up' ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                                        {m.change}{typeof m.change === 'number' ? '%' : ''}
                                     </div>
                                 </div>
-                                <p className="text-[10px] font-black text-neutral-600 uppercase tracking-[0.2em] mb-2">{stat.label}</p>
-                                <h3 className="text-3xl font-black text-white tracking-tight">{stat.value}</h3>
-                            </div>
-                        </Card>
-                    </motion.div>
-                ))}
-            </div>
 
-            {/* Table & Rankings */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Visual Order Board */}
-                <motion.div variants={itemVariant} className="lg:col-span-2">
-                    <Card className="flex flex-col bg-neutral-950 border-neutral-900 shadow-2xl rounded-[2.5rem] overflow-hidden">
-                        <div className="p-10 border-b border-neutral-900 flex items-center justify-between bg-neutral-950/50 backdrop-blur-xl">
-                            <div className="flex items-center gap-4">
-                                <div className="w-12 h-12 rounded-2xl bg-orange-600/10 flex items-center justify-center text-orange-600">
-                                    <Activity className="w-6 h-6" />
+                                <div className="space-y-1">
+                                    <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.2em]">{m.label}</p>
+                                    <h3 className="text-3xl font-black text-white tracking-tighter tabular-nums">{m.value}</h3>
                                 </div>
-                                <div>
-                                    <h2 className="text-xl font-bold text-white uppercase tracking-widest">Order <span className="text-orange-600">Stream</span></h2>
-                                    <p className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest mt-1">Live Kitchen Pulse</p>
-                                </div>
-                            </div>
-                            <Link href="/dashboard/orders">
-                                <Button variant="outline" className="h-12 px-6 border-neutral-800 text-[10px] font-bold uppercase tracking-widest hover:border-white hover:text-white transition-all rounded-xl">
-                                    Full Ledger
-                                </Button>
-                            </Link>
-                        </div>
 
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left">
-                                <thead>
-                                    <tr className="bg-black/40 text-neutral-600 font-bold text-[10px] uppercase tracking-[0.2em]">
-                                        <th className="px-10 py-6">ID & Location</th>
-                                        <th className="px-10 py-6 text-center">Volume</th>
-                                        <th className="px-10 py-6">Capital</th>
-                                        <th className="px-10 py-6 text-center">Lifecycle</th>
-                                        <th className="px-10 py-6 text-right">Age</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-neutral-900">
-                                    {recentOrders.map((order) => (
-                                        <tr key={order.id} className="group hover:bg-white/[0.01] transition-all duration-300">
-                                            <td className="px-10 py-7">
-                                                <div className="flex items-center gap-4">
-                                                    <div className="w-10 h-10 rounded-xl bg-neutral-900 border border-neutral-800 text-white flex items-center justify-center font-black text-xs group-hover:border-orange-600/50 transition-colors">
-                                                        {order.table.split(' ')[1]}
-                                                    </div>
-                                                    <div>
-                                                        <span className="font-bold text-white text-sm block">{order.table}</span>
-                                                        <span className="text-[9px] font-bold text-neutral-600 uppercase tracking-widest">STATION 0{order.id}</span>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td className="px-10 py-7 text-center">
-                                                <Badge variant="outline" className="border-neutral-800 text-neutral-400 font-bold text-[10px] uppercase">{order.items} ITEMS</Badge>
-                                            </td>
-                                            <td className="px-10 py-7">
-                                                <span className="font-bold text-white text-md">{order.total}</span>
-                                            </td>
-                                            <td className="px-10 py-7 text-center">
-                                                <div className={cn(
-                                                    "inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest leading-none",
-                                                    order.status === 'preparing' ? 'bg-orange-600/10 text-orange-500' :
-                                                        order.status === 'ready' ? 'bg-emerald-500/10 text-emerald-500' :
-                                                            'bg-neutral-800/40 text-neutral-500'
-                                                )}>
-                                                    <div className={cn(
-                                                        "w-1 h-1 rounded-full",
-                                                        order.status === 'preparing' ? 'bg-orange-500 animate-pulse' :
-                                                            order.status === 'ready' ? 'bg-emerald-500' : 'bg-neutral-600'
-                                                    )} />
-                                                    {order.status}
-                                                </div>
-                                            </td>
-                                            <td className="px-10 py-7 text-right">
-                                                <span className="font-medium text-[11px] text-neutral-500">{order.time}</span>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </Card>
-                </motion.div>
+                                <motion.div
+                                    className={cn("absolute bottom-0 left-0 h-0.5 bg-gradient-to-r from-transparent to-transparent group-hover:from-transparent group-hover:via-current group-hover:to-transparent opacity-50", m.accent.replace('bg-', 'text-'))}
+                                    layoutId={`accent-${i}`}
+                                />
+                            </Card>
+                        </motion.div>
+                    ))}
+                </div>
 
-                {/* Popular Dishes Tile */}
-                <motion.div variants={itemVariant}>
-                    <Card className="flex flex-col h-full bg-neutral-950 border-neutral-900 shadow-2xl rounded-[2.5rem] overflow-hidden group">
-                        <div className="p-10 border-b border-neutral-900 bg-neutral-950/50 backdrop-blur-xl relative">
-                            <div className="absolute top-0 right-0 p-4">
-                                <Sparkles className="w-5 h-5 text-orange-600/30 group-hover:text-orange-600 transition-colors" />
-                            </div>
-                            <h2 className="text-xl font-bold text-white uppercase tracking-widest">MVP <span className="text-orange-600">Dishes</span></h2>
-                            <p className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest mt-1">Daily Profit Drivers</p>
-                        </div>
+                {/* Secondary Grid: Interactive Insights */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    {/* Efficiency Glow Card */}
+                    <div className="lg:col-span-4 h-full">
+                        <Card className="relative overflow-hidden p-8 h-full bg-neutral-900/40 backdrop-blur-xl border border-neutral-800/50 flex flex-col justify-between">
+                            <div className="absolute top-0 right-0 w-32 h-32 bg-orange-600/10 blur-[60px] rounded-full -translate-y-16 translate-x-16" />
 
-                        <div className="p-10 flex-1 space-y-10">
-                            {topItems.map((item, i) => (
-                                <div key={item.name} className="group/item cursor-default">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <div className="flex items-center gap-4">
-                                            <span className="text-[10px] font-black text-neutral-800 group-hover/item:text-orange-600 transition-colors italic tracking-widest">#{i + 1}</span>
-                                            <p className="font-black text-white text-md uppercase tracking-tight group-hover/item:translate-x-1 transition-transform">{item.name}</p>
-                                        </div>
-                                        <Badge className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 font-black text-[9px] uppercase tracking-tighter">
-                                            {item.grow}
-                                        </Badge>
+                            <div className="flex items-center justify-between mb-8">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-amber-500/10 rounded-lg">
+                                        <Zap className="w-5 h-5 text-amber-500" />
                                     </div>
-                                    <div className="h-2 w-full bg-neutral-900 rounded-full overflow-hidden shadow-inner">
+                                    <span className="text-xs font-black text-white uppercase tracking-widest">Service Health</span>
+                                </div>
+                                <Crown className="w-4 h-4 text-amber-500" />
+                            </div>
+
+                            <div className="space-y-6">
+                                <div className="flex items-baseline gap-2">
+                                    <span className="text-7xl font-black bg-gradient-to-br from-white via-white to-white/50 bg-clip-text text-transparent">
+                                        {stats.efficiency}
+                                    </span>
+                                    <span className="text-2xl font-black text-neutral-700">%</span>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <div className="flex justify-between text-[10px] font-black uppercase tracking-widest text-neutral-500">
+                                        <span>Capacity Load</span>
+                                        <span className="text-emerald-500">Optimal</span>
+                                    </div>
+                                    <div className="h-2 bg-neutral-950/50 rounded-full border border-neutral-800 overflow-hidden">
                                         <motion.div
                                             initial={{ width: 0 }}
-                                            animate={{ width: `${Math.max(30, 100 - (i * 20))}%` }}
-                                            transition={{ duration: 1.5, ease: "circOut", delay: i * 0.2 }}
-                                            className="h-full bg-gradient-to-r from-orange-600 to-orange-400 rounded-full"
+                                            animate={{ width: `${stats.efficiency}%` }}
+                                            transition={{ duration: 1.5, ease: "easeOut" }}
+                                            className="h-full bg-gradient-to-r from-orange-600 to-amber-400 shadow-[0_0_10px_rgba(249,115,22,0.5)]"
                                         />
                                     </div>
-                                    <div className="flex justify-between mt-3 px-1">
-                                        <p className="text-[9px] font-bold text-neutral-600 uppercase tracking-widest">{item.orders} ORDERS</p>
-                                        <p className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Top Rated</p>
-                                    </div>
                                 </div>
-                            ))}
-                        </div>
+                            </div>
 
-                        <div className="p-10 bg-neutral-900/40 mt-auto border-t border-neutral-900">
-                            <Link href="/dashboard/menu" className="h-16 flex items-center justify-center bg-white text-neutral-950 rounded-2xl hover:bg-orange-600 hover:text-white transition-all duration-500 font-black uppercase tracking-[0.2em] text-[10px] group/btn overflow-hidden relative shadow-xl">
-                                <span className="relative z-10">Inventory Admin</span>
-                                <div className="absolute inset-0 bg-orange-600 translate-y-full group-hover/btn:translate-y-0 transition-transform duration-500" />
-                            </Link>
-                        </div>
-                    </Card>
-                </motion.div>
-            </div>
+                            <div className="mt-8 pt-6 border-t border-neutral-800 flex items-center gap-3">
+                                <div className="flex -space-x-2">
+                                    {[1, 2, 3].map(i => (
+                                        <div key={i} className="w-8 h-8 rounded-full bg-neutral-800 border-2 border-neutral-900 flex items-center justify-center text-[10px] font-black">
+                                            {String.fromCharCode(64 + i)}
+                                        </div>
+                                    ))}
+                                </div>
+                                <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest flex items-center gap-2">
+                                    <Sparkles className="w-3 h-3 text-amber-500" /> +2 Workers Peak
+                                </span>
+                            </div>
+                        </Card>
+                    </div>
 
-            {/* Quick Actions / Alerts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                <motion.div variants={itemVariant}>
-                    <div className="p-8 rounded-[2rem] bg-orange-600/10 border border-orange-600/20 flex items-center justify-between group hover:bg-orange-600/20 transition-all cursor-pointer">
-                        <div className="flex items-center gap-6">
-                            <div className="w-16 h-16 rounded-[1.5rem] bg-orange-600 flex items-center justify-center text-white shadow-xl shadow-orange-600/30 group-hover:scale-110 transition-transform">
-                                <ChefHat className="w-8 h-8" />
+                    {/* Top Sellers: Premium Table View */}
+                    <div className="lg:col-span-8">
+                        <Card className="relative h-full bg-neutral-900/40 backdrop-blur-xl border border-neutral-800/50 overflow-hidden">
+                            <div className="p-6 border-b border-neutral-800/50 flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-rose-500/10 rounded-lg">
+                                        <Flame className="w-5 h-5 text-rose-500" />
+                                    </div>
+                                    <span className="text-xs font-black text-white uppercase tracking-widest">Demand Analysis</span>
+                                </div>
+                                <button className="group text-[10px] font-black text-orange-500 hover:text-orange-400 uppercase tracking-[0.2em] flex items-center gap-2 transition-all">
+                                    Intelligence Report <ArrowUpRight className="w-4 h-4 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+                                </button>
                             </div>
-                            <div>
-                                <h4 className="text-xl font-black text-white uppercase tracking-tight">KITCHEN OPS</h4>
-                                <p className="text-neutral-500 text-sm font-medium">Switch to dedicated production monitor</p>
+
+                            <div className="p-6">
+                                <div className="space-y-4">
+                                    {stats.topItems.map((item, idx) => (
+                                        <motion.div
+                                            key={idx}
+                                            initial={{ opacity: 0, x: 20 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            transition={{ delay: 0.1 * idx }}
+                                            className="group flex items-center justify-between p-4 bg-neutral-950/20 border border-neutral-800/50 rounded-2xl hover:bg-neutral-950/40 hover:border-neutral-700 transition-all cursor-pointer"
+                                        >
+                                            <div className="flex items-center gap-5">
+                                                <div className="relative w-12 h-12 bg-neutral-900 rounded-xl flex items-center justify-center border border-neutral-800 group-hover:border-neutral-700">
+                                                    <span className="text-lg font-black text-neutral-700 group-hover:text-orange-500/50 transition-colors">0{idx + 1}</span>
+                                                    {idx === 0 && <Award className="absolute -top-1.5 -right-1.5 w-5 h-5 text-amber-500 drop-shadow-lg" />}
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-black text-white tracking-wide">{item.name}</p>
+                                                    <div className="flex items-center gap-2 mt-0.5">
+                                                        <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest">{item.count} Orders</span>
+                                                        <div className="h-1 w-1 rounded-full bg-neutral-700" />
+                                                        <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">High Margin</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="text-right">
+                                                <p className="text-lg font-black text-white tabular-nums tracking-tighter">Rs. {(item.revenue / 1000).toFixed(1)}k</p>
+                                                <p className="text-[10px] font-black text-neutral-600 uppercase tracking-widest">Gross Yield</p>
+                                            </div>
+                                        </motion.div>
+                                    ))}
+                                </div>
                             </div>
-                        </div>
-                        <ArrowRight className="w-6 h-6 text-orange-600 group-hover:translate-x-2 transition-transform" />
+
+                            <div className="p-6 bg-neutral-950/40 border-t border-neutral-800/50">
+                                <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+                                    <div className="flex items-center gap-4">
+                                        <div className="h-10 w-10 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-500">
+                                            <TrendingUp className="w-5 h-5" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs font-black text-white uppercase tracking-tighter">+12% vs Yesterday</p>
+                                            <p className="text-[9px] font-black text-neutral-500 uppercase tracking-[0.2em]">Overall Demand Growth</p>
+                                        </div>
+                                    </div>
+                                    <button className="h-10 px-6 bg-neutral-900 border border-neutral-800 rounded-xl text-[10px] font-black text-white uppercase tracking-[0.2em] hover:bg-neutral-800 transition-all flex items-center gap-2">
+                                        Predictive Insights <MousePointer2 className="w-3 h-3" />
+                                    </button>
+                                </div>
+                            </div>
+                        </Card>
                     </div>
-                </motion.div>
-                <motion.div variants={itemVariant}>
-                    <div className="p-8 rounded-[2rem] bg-neutral-900 border border-neutral-800 flex items-center justify-between group hover:border-white/20 transition-all cursor-pointer">
-                        <div className="flex items-center gap-6">
-                            <div className="w-16 h-16 rounded-[1.5rem] bg-white flex items-center justify-center text-black shadow-xl group-hover:scale-110 transition-transform">
-                                <Receipt className="w-8 h-8" />
+                </div>
+
+                {/* Status Bar Footer: Minimal & Clean */}
+                <footer className="pt-8 border-t border-neutral-900 flex flex-col md:flex-row items-center justify-between gap-6 opacity-60 hover:opacity-100 transition-opacity">
+                    <div className="flex items-center gap-6">
+                        {[
+                            { label: 'Latency', val: '2ms', icon: Activity },
+                            { label: 'Workers', val: '12 Active', icon: Target },
+                            { label: 'Security', val: 'Encrypted', icon: BadgeCheck },
+                        ].map((s, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                                <s.icon className="w-3.5 h-3.5 text-neutral-600" />
+                                <span className="text-[9px] font-black uppercase tracking-widest text-neutral-500">
+                                    {s.label}: <span className="text-white">{s.val}</span>
+                                </span>
                             </div>
-                            <div>
-                                <h4 className="text-xl font-black text-white uppercase tracking-tight">POINT OF SALE</h4>
-                                <p className="text-neutral-500 text-sm font-medium">Open terminal for billing and checkout</p>
-                            </div>
-                        </div>
-                        <ArrowRight className="w-6 h-6 text-white group-hover:translate-x-2 transition-transform" />
+                        ))}
                     </div>
-                </motion.div>
+                    <p className="text-[9px] font-black uppercase tracking-[0.3em] text-neutral-600">
+                        Nexus POS v2.4.0 • Enterprise Edition
+                    </p>
+                </footer>
             </div>
-        </motion.div>
+        </div>
     )
 }

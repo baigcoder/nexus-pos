@@ -53,50 +53,53 @@ const statusConfig: Record<RiderStatus, { label: string; color: string; bg: stri
 export default function RidersPage() {
     const { restaurant } = useAuthStore()
     const { success, error: showError } = useToast()
+    const supabase = createClient()
+
     const [isLoading, setIsLoading] = useState(true)
     const [statusFilter, setStatusFilter] = useState<RiderStatus | 'all'>('all')
     const [searchQuery, setSearchQuery] = useState('')
-    const [showAddModal, setShowAddModal] = useState(false)
     const [selectedRider, setSelectedRider] = useState<Rider | null>(null)
-
-    // Mock rider data (in production, this would come from Supabase)
-    const [riders, setRiders] = useState<Rider[]>([
-        {
-            id: '1',
-            name: 'Ahmed Khan',
-            phone: '+92 300 1234567',
-            status: 'online',
-            activeDeliveries: 0,
-            totalDeliveries: 156,
-            rating: 4.8,
-            createdAt: new Date().toISOString(),
-        },
-        {
-            id: '2',
-            name: 'Bilal Ahmad',
-            phone: '+92 321 9876543',
-            status: 'busy',
-            activeDeliveries: 2,
-            totalDeliveries: 89,
-            rating: 4.5,
-            createdAt: new Date().toISOString(),
-        },
-        {
-            id: '3',
-            name: 'Faraz Ali',
-            phone: '+92 333 5555555',
-            status: 'offline',
-            activeDeliveries: 0,
-            totalDeliveries: 234,
-            rating: 4.9,
-            createdAt: new Date().toISOString(),
-        },
-    ])
+    const [riders, setRiders] = useState<Rider[]>([])
 
     useEffect(() => {
-        // Simulate loading
-        setTimeout(() => setIsLoading(false), 500)
-    }, [])
+        if (restaurant?.id) {
+            fetchRiders()
+        }
+    }, [restaurant?.id])
+
+    const fetchRiders = async () => {
+        setIsLoading(true)
+        try {
+            // Fetch staff with role 'delivery' from database
+            const { data, error } = await supabase
+                .from('staff')
+                .select('*')
+                .eq('restaurant_id', restaurant!.id)
+                .eq('role', 'delivery')
+                .order('created_at', { ascending: false })
+
+            if (error) throw error
+
+            // Map staff data to Rider interface
+            const riderData: Rider[] = (data || []).map(staff => ({
+                id: staff.id,
+                name: staff.name,
+                phone: staff.phone || 'N/A',
+                status: staff.is_active ? 'online' : 'offline' as RiderStatus,
+                activeDeliveries: 0, // Would come from orders table
+                totalDeliveries: 0, // Would come from orders count
+                rating: 5.0, // Would come from reviews
+                createdAt: staff.created_at,
+            }))
+
+            setRiders(riderData)
+        } catch (err: any) {
+            console.error('Error fetching riders:', err)
+            showError('Error', 'Failed to load riders')
+        } finally {
+            setIsLoading(false)
+        }
+    }
 
     const filteredRiders = riders.filter(rider => {
         if (statusFilter !== 'all' && rider.status !== statusFilter) return false
@@ -111,31 +114,30 @@ export default function RidersPage() {
         offline: riders.filter(r => r.status === 'offline').length,
     }
 
-    const toggleRiderStatus = (riderId: string) => {
-        setRiders(prev => prev.map(r => {
-            if (r.id === riderId) {
-                const newStatus: RiderStatus = r.status === 'online' ? 'offline' : 'online'
-                return { ...r, status: newStatus }
-            }
-            return r
-        }))
-        success('Status Updated', 'Rider status has been changed')
-    }
+    const toggleRiderStatus = async (riderId: string) => {
+        try {
+            const rider = riders.find(r => r.id === riderId)
+            if (!rider) return
 
-    const addRider = (name: string, phone: string) => {
-        const newRider: Rider = {
-            id: Date.now().toString(),
-            name,
-            phone,
-            status: 'offline',
-            activeDeliveries: 0,
-            totalDeliveries: 0,
-            rating: 5.0,
-            createdAt: new Date().toISOString(),
+            const newStatus = rider.status === 'online' ? false : true
+
+            const { error } = await supabase
+                .from('staff')
+                .update({ is_active: newStatus })
+                .eq('id', riderId)
+
+            if (error) throw error
+
+            setRiders(prev => prev.map(r => {
+                if (r.id === riderId) {
+                    return { ...r, status: newStatus ? 'online' : 'offline' as RiderStatus }
+                }
+                return r
+            }))
+            success('Status Updated', 'Rider status has been changed')
+        } catch (err: any) {
+            showError('Error', err.message || 'Failed to update status')
         }
-        setRiders(prev => [...prev, newRider])
-        setShowAddModal(false)
-        success('Rider Added', `${name} has been added to your delivery team`)
     }
 
     const container = {
@@ -170,16 +172,6 @@ export default function RidersPage() {
                             Manage your delivery riders, track availability, and monitor performance.
                         </motion.p>
                     </div>
-
-                    <motion.div variants={itemVariant}>
-                        <Button
-                            onClick={() => setShowAddModal(true)}
-                            className="h-16 px-10 bg-purple-600 hover:bg-purple-500 text-white rounded-2xl font-bold uppercase tracking-widest text-xs shadow-2xl shadow-purple-600/20 group transition-all"
-                        >
-                            <Plus className="w-5 h-5 mr-3 group-hover:rotate-90 transition-transform duration-300" />
-                            Add Rider
-                        </Button>
-                    </motion.div>
                 </div>
 
                 {/* Stats Bar */}
@@ -336,16 +328,6 @@ export default function RidersPage() {
                     </div>
                 )}
 
-                {/* Add Rider Modal */}
-                <Modal
-                    isOpen={showAddModal}
-                    onClose={() => setShowAddModal(false)}
-                    title="ADD NEW RIDER"
-                    size="md"
-                >
-                    <RiderForm onSubmit={addRider} onCancel={() => setShowAddModal(false)} />
-                </Modal>
-
                 {/* Rider Detail Modal */}
                 <Modal
                     isOpen={!!selectedRider}
@@ -374,64 +356,5 @@ export default function RidersPage() {
                 </Modal>
             </motion.div>
         </div>
-    )
-}
-
-// Rider Form Component
-function RiderForm({ onSubmit, onCancel }: { onSubmit: (name: string, phone: string) => void; onCancel: () => void }) {
-    const [name, setName] = useState('')
-    const [phone, setPhone] = useState('')
-
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault()
-        if (name && phone) {
-            onSubmit(name, phone)
-        }
-    }
-
-    return (
-        <form onSubmit={handleSubmit} className="space-y-6 p-2">
-            <div className="space-y-4">
-                <div className="space-y-2">
-                    <label className="text-[10px] font-black text-neutral-500 uppercase tracking-widest px-1">Full Name</label>
-                    <input
-                        type="text"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="Enter rider's full name"
-                        required
-                        className="w-full bg-black border border-neutral-800 rounded-xl h-14 px-5 text-sm text-white font-medium focus:outline-none focus:border-purple-500/50 transition-all placeholder:text-neutral-700"
-                    />
-                </div>
-                <div className="space-y-2">
-                    <label className="text-[10px] font-black text-neutral-500 uppercase tracking-widest px-1">Phone Number</label>
-                    <input
-                        type="tel"
-                        value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
-                        placeholder="+92 300 1234567"
-                        required
-                        className="w-full bg-black border border-neutral-800 rounded-xl h-14 px-5 text-sm text-white font-medium focus:outline-none focus:border-purple-500/50 transition-all placeholder:text-neutral-700"
-                    />
-                </div>
-            </div>
-
-            <div className="flex gap-4 pt-4">
-                <Button
-                    variant="outline"
-                    className="flex-1 h-14 rounded-xl border-neutral-800 text-neutral-500 font-bold uppercase tracking-widest text-xs hover:text-white"
-                    onClick={onCancel}
-                    type="button"
-                >
-                    Cancel
-                </Button>
-                <Button
-                    className="flex-1 h-14 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold uppercase tracking-widest text-xs shadow-lg shadow-purple-600/20"
-                    type="submit"
-                >
-                    Add Rider
-                </Button>
-            </div>
-        </form>
     )
 }

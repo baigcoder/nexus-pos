@@ -1,20 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { validateApiKey, getCorsHeaders } from '@/lib/api-keys'
 
-// CORS headers for external access
-const corsHeaders = {
+// Default CORS headers for backward compatibility
+const defaultCorsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-API-Key, X-Restaurant-ID',
 }
 
 // Handle preflight
-export async function OPTIONS() {
-    return NextResponse.json({}, { headers: corsHeaders })
+export async function OPTIONS(request: NextRequest) {
+    const origin = request.headers.get('origin')
+    const apiKey = request.headers.get('x-api-key')
+
+    // If API key provided, validate and get CORS settings
+    if (apiKey) {
+        const validation = await validateApiKey(apiKey, origin)
+        if (validation.valid && validation.allowedOrigins) {
+            return NextResponse.json({}, {
+                headers: getCorsHeaders(origin, validation.allowedOrigins)
+            })
+        }
+    }
+
+    return NextResponse.json({}, { headers: defaultCorsHeaders })
 }
 
 // POST /api/v1/orders - Create order from external website
 export async function POST(request: NextRequest) {
+    const origin = request.headers.get('origin')
+    const apiKey = request.headers.get('x-api-key')
+
     try {
         const body = await request.json()
         const {
@@ -32,8 +49,39 @@ export async function POST(request: NextRequest) {
         if (!restaurant_id) {
             return NextResponse.json(
                 { error: 'restaurant_id is required' },
-                { status: 400, headers: corsHeaders }
+                { status: 400, headers: defaultCorsHeaders }
             )
+        }
+
+        // If API key provided, validate it
+        let corsHeaders: Record<string, string> = defaultCorsHeaders
+        if (apiKey) {
+            const validation = await validateApiKey(apiKey, origin)
+
+            if (!validation.valid) {
+                return NextResponse.json(
+                    { error: validation.error || 'Invalid API key' },
+                    { status: 401, headers: defaultCorsHeaders }
+                )
+            }
+
+            // Check if API key matches restaurant
+            if (validation.restaurantId !== restaurant_id) {
+                return NextResponse.json(
+                    { error: 'API key does not match restaurant' },
+                    { status: 403, headers: defaultCorsHeaders }
+                )
+            }
+
+            // Check permission
+            if (!validation.permissions?.includes('orders:create')) {
+                return NextResponse.json(
+                    { error: 'API key does not have permission to create orders' },
+                    { status: 403, headers: defaultCorsHeaders }
+                )
+            }
+
+            corsHeaders = getCorsHeaders(origin, validation.allowedOrigins || [])
         }
 
         if (!items || !Array.isArray(items) || items.length === 0) {
@@ -50,12 +98,32 @@ export async function POST(request: NextRequest) {
             )
         }
 
+        // Validate phone format (basic check)
+        const phoneRegex = /^[\d\s\-+()]{10,20}$/
+        if (!phoneRegex.test(customer_phone)) {
+            return NextResponse.json(
+                { error: 'Invalid phone number format' },
+                { status: 400, headers: corsHeaders }
+            )
+        }
+
+        // Validate email if provided
+        if (customer_email) {
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+            if (!emailRegex.test(customer_email)) {
+                return NextResponse.json(
+                    { error: 'Invalid email format' },
+                    { status: 400, headers: corsHeaders }
+                )
+            }
+        }
+
         const supabase = await createClient()
 
         // Verify restaurant exists
         const { data: restaurant, error: restaurantError } = await supabase
             .from('restaurants')
-            .select('id, tax_rate')
+            .select('id, tax_rate, name')
             .eq('id', restaurant_id)
             .single()
 
@@ -67,10 +135,10 @@ export async function POST(request: NextRequest) {
         }
 
         // Get menu items for price calculation
-        const itemIds = items.map((i: any) => i.menu_item_id)
+        const itemIds = items.map((i: { menu_item_id: string }) => i.menu_item_id)
         const { data: menuItems } = await supabase
             .from('menu_items')
-            .select('id, price, name')
+            .select('id, price, name, is_available')
             .in('id', itemIds)
 
         if (!menuItems || menuItems.length === 0) {
@@ -80,19 +148,35 @@ export async function POST(request: NextRequest) {
             )
         }
 
+        // Check all items are available
+        const unavailableItems = menuItems.filter(item => !item.is_available)
+        if (unavailableItems.length > 0) {
+            return NextResponse.json(
+                {
+                    error: 'Some items are not available',
+                    unavailable: unavailableItems.map(i => i.name)
+                },
+                { status: 400, headers: corsHeaders }
+            )
+        }
+
         // Calculate totals
         let subtotal = 0
-        const orderItems = items.map((item: any) => {
-            const menuItem = menuItems.find((m: any) => m.id === item.menu_item_id)
+        const orderItems = items.map((item: { menu_item_id: string; quantity: number; special_instructions?: string }) => {
+            const menuItem = menuItems.find((m) => m.id === item.menu_item_id)
             if (!menuItem) return null
-            const itemTotal = menuItem.price * item.quantity
+
+            // Validate quantity
+            const quantity = Math.max(1, Math.min(99, Math.floor(item.quantity)))
+            const itemTotal = menuItem.price * quantity
             subtotal += itemTotal
+
             return {
                 menu_item_id: item.menu_item_id,
-                quantity: item.quantity,
+                quantity,
                 unit_price: menuItem.price,
                 subtotal: itemTotal,
-                special_instructions: item.special_instructions || null,
+                special_instructions: item.special_instructions?.slice(0, 500) || null, // Limit length
                 status: 'pending',
             }
         }).filter(Boolean)
@@ -129,6 +213,15 @@ export async function POST(request: NextRequest) {
             tableId = newTable?.id
         }
 
+        // Sanitize notes
+        const sanitizedNotes = [
+            is_delivery ? 'DELIVERY' : 'PICKUP',
+            customer_name.slice(0, 100),
+            customer_phone.slice(0, 20),
+            delivery_address ? delivery_address.slice(0, 200) : null,
+            notes ? notes.slice(0, 500) : null,
+        ].filter(Boolean).join(' | ')
+
         // Create order
         const { data: order, error: orderError } = await supabase
             .from('orders')
@@ -141,7 +234,7 @@ export async function POST(request: NextRequest) {
                 tax,
                 discount: 0,
                 total,
-                notes: `${is_delivery ? 'DELIVERY' : 'PICKUP'} | ${customer_name} | ${customer_phone}${delivery_address ? ` | ${delivery_address}` : ''}${notes ? ` | ${notes}` : ''}`,
+                notes: sanitizedNotes,
                 is_priority: false,
             })
             .select('id, order_number')
@@ -156,7 +249,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Create order items
-        const orderItemsWithOrderId = orderItems.map((item: any) => ({
+        const orderItemsWithOrderId = orderItems.map((item) => ({
             ...item,
             order_id: order.id,
         }))
@@ -164,7 +257,8 @@ export async function POST(request: NextRequest) {
         await supabase.from('order_items').insert(orderItemsWithOrderId)
 
         // Generate tracking URL
-        const trackingUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'https://nexuspos.com'}/track?order=${order.order_number}`
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://nexuspos.com'
+        const trackingUrl = `${appUrl}/track?order=${order.order_number}`
 
         return NextResponse.json({
             success: true,
@@ -184,13 +278,16 @@ export async function POST(request: NextRequest) {
         console.error('Orders API error:', error)
         return NextResponse.json(
             { error: 'Internal server error' },
-            { status: 500, headers: corsHeaders }
+            { status: 500, headers: defaultCorsHeaders }
         )
     }
 }
 
 // GET /api/v1/orders?order_number=1234 - Get order status
 export async function GET(request: NextRequest) {
+    const origin = request.headers.get('origin')
+    const apiKey = request.headers.get('x-api-key')
+
     try {
         const { searchParams } = new URL(request.url)
         const orderNumber = searchParams.get('order_number')
@@ -199,8 +296,17 @@ export async function GET(request: NextRequest) {
         if (!orderNumber && !orderId) {
             return NextResponse.json(
                 { error: 'order_number or order_id is required' },
-                { status: 400, headers: corsHeaders }
+                { status: 400, headers: defaultCorsHeaders }
             )
+        }
+
+        // Determine CORS headers based on API key
+        let corsHeaders: Record<string, string> = defaultCorsHeaders
+        if (apiKey) {
+            const validation = await validateApiKey(apiKey, origin)
+            if (validation.valid && validation.allowedOrigins) {
+                corsHeaders = getCorsHeaders(origin, validation.allowedOrigins)
+            }
         }
 
         const supabase = await createClient()
@@ -252,7 +358,7 @@ export async function GET(request: NextRequest) {
         console.error('Orders GET API error:', error)
         return NextResponse.json(
             { error: 'Internal server error' },
-            { status: 500, headers: corsHeaders }
+            { status: 500, headers: defaultCorsHeaders }
         )
     }
 }

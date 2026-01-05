@@ -1,20 +1,26 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
     ChefHat,
     ArrowLeft,
     Delete,
-    Building2,
-    Utensils
+    Mail,
+    Fingerprint,
+    ShieldCheck,
+    Loader2,
+    Zap,
+    Wifi,
+    KeyRound,
+    User
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { signInWithPin } from '@/lib/supabase/client'
+import { createClient } from '@/lib/supabase/client'
 import { useAuthStore } from '@/stores'
 import { useToast } from '@/components/ui/toast'
-import { Button, Input, Card, Badge } from '@/components/ui/common'
+import { Badge } from '@/components/ui/common'
 import { cn } from '@/lib/utils'
 
 export default function StaffLoginPage() {
@@ -22,247 +28,450 @@ export default function StaffLoginPage() {
     const { loginAsStaff } = useAuthStore()
     const { success, error: showError } = useToast()
 
-    const [step, setStep] = useState<'restaurant' | 'pin'>('restaurant')
-    const [restaurantSlug, setRestaurantSlug] = useState('')
+    const [step, setStep] = useState<'email' | 'pin'>('email')
+    const [email, setEmail] = useState('')
     const [pin, setPin] = useState('')
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [currentTime, setCurrentTime] = useState(new Date())
+    const [staffPreview, setStaffPreview] = useState<any>(null)
+
+    useEffect(() => {
+        const interval = setInterval(() => setCurrentTime(new Date()), 1000)
+        return () => clearInterval(interval)
+    }, [])
 
     const pinPadNumbers = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'delete']
 
     const handlePinPress = (value: string) => {
         if (value === 'delete') {
             setPin(pin.slice(0, -1))
-        } else if (value && pin.length < 4) {
+        } else if (value && pin.length < 6) {
             const newPin = pin + value
             setPin(newPin)
-
-            if (newPin.length === 4) {
+            // Auto-submit when PIN is complete (4 for regular, 6 for temp)
+            if (newPin.length === 6 || (newPin.length === 4 && !staffPreview?.needs_setup)) {
                 handlePinSubmit(newPin)
             }
         }
     }
 
-    const handleRestaurantSubmit = (e: React.FormEvent) => {
+    const handleEmailSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
-        if (restaurantSlug.trim()) {
-            setError(null)
+        if (!email.trim()) return
+
+        setIsLoading(true)
+        setError(null)
+
+        try {
+            // Use dedicated endpoint to check if staff exists
+            const response = await fetch('/api/auth/staff-check', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: email.toLowerCase().trim() }),
+            })
+
+            const result = await response.json()
+
+            if (!response.ok || !result.success) {
+                setError(result.error || 'No active staff account found with this email')
+                return
+            }
+
+            // Staff found - set preview with their info and move to PIN step
+            setStaffPreview({
+                ...result.staff,
+                email: email.toLowerCase().trim(),
+            })
             setStep('pin')
+        } catch (err) {
+            setError('Failed to verify email. Please try again.')
+        } finally {
+            setIsLoading(false)
         }
     }
 
     const handlePinSubmit = async (pinCode: string) => {
+        if (!staffPreview?.email) return
+
         setIsLoading(true)
         setError(null)
 
-        const result = await signInWithPin(restaurantSlug.toLowerCase().trim(), pinCode)
+        try {
+            // Use server-side API to verify PIN
+            const response = await fetch('/api/auth/staff-email-login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: staffPreview.email, pin: pinCode }),
+            })
 
-        if (result.success && result.staff && result.restaurant) {
-            loginAsStaff(result.staff, result.restaurant)
-            success('Nexus Synchronization Complete', `${result.staff.name} identity verified.`)
+            const result = await response.json()
 
-            if (result.staff.role === 'kitchen') {
-                router.push('/dashboard/kitchen')
-            } else if (result.staff.role === 'waiter') {
-                router.push('/dashboard/orders')
-            } else {
-                router.push('/dashboard')
+            if (!response.ok || !result.success) {
+                setError(result.error || 'Invalid PIN')
+                setPin('')
+                setIsLoading(false)
+                return
             }
-        } else {
-            setError(result.error || 'INVALID AUTH CIPHER')
-            // Add a slight shake animation state if possible, but keeping it simple for now
-            setPin('')
-        }
 
-        setIsLoading(false)
+            // Check if needs setup
+            if (result.needsSetup) {
+                success('PIN Verified!', 'Let\'s set up your account')
+                router.push(result.setupUrl)
+                return
+            }
+
+            // Regular login
+            loginAsStaff(result.staff, result.restaurant)
+            success('Welcome Back!', `Logged in as ${result.staff.name}`)
+
+            // Redirect based on role
+            const roleRoutes: Record<string, string> = {
+                kitchen: '/dashboard/kitchen',
+                waiter: '/dashboard/orders',
+                cashier: '/dashboard/cashier',
+                delivery: '/dashboard/delivery-boy',
+                manager: '/dashboard',
+                owner: '/dashboard',
+            }
+            router.push(roleRoutes[result.staff.role] || '/dashboard')
+        } catch (err) {
+            setError('Failed to verify PIN')
+            setPin('')
+        } finally {
+            setIsLoading(false)
+        }
     }
 
     return (
-        <div className="min-h-screen bg-black text-white flex items-center justify-center p-6 overflow-hidden relative font-sans selection:bg-orange-500/30">
-            {/* Tactical Grid Background */}
-            <div className="absolute inset-0 opacity-20 pointer-events-none"
-                style={{ backgroundImage: `radial-gradient(circle at 2px 2px, #333 1px, transparent 0)`, backgroundSize: '40px 40px' }} />
-
-            {/* Background Ambience */}
-            <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                <motion.div
-                    animate={{
-                        scale: [1, 1.2, 1],
-                        opacity: [0.1, 0.2, 0.1]
-                    }}
-                    transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
-                    className="absolute top-[-10%] left-[-10%] w-full h-full bg-orange-600/10 blur-[180px] rounded-full"
-                />
-                <div className="absolute bottom-[-20%] right-[-10%] w-[80%] h-[80%] bg-neutral-900/40 blur-[150px] rounded-full" />
+        <div className="min-h-screen bg-[#030303] text-white flex items-center justify-center p-4 overflow-hidden relative font-sans selection:bg-orange-500/30">
+            {/* Ambient Background */}
+            <div className="fixed inset-0 pointer-events-none">
+                <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(ellipse_at_top_left,_rgba(234,88,12,0.08)_0%,_transparent_50%)]" />
+                <div className="absolute bottom-0 right-0 w-full h-full bg-[radial-gradient(ellipse_at_bottom_right,_rgba(234,88,12,0.05)_0%,_transparent_50%)]" />
+                <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.15] brightness-50 mix-blend-overlay" />
             </div>
 
-            <div className="w-full max-w-[460px] relative z-10">
-                {/* Header */}
+            <div className="w-full max-w-md relative z-10">
+                {/* Header Section */}
                 <motion.div
-                    initial={{ opacity: 0, y: -20 }}
+                    initial={{ opacity: 0, y: -30 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="text-center space-y-6 mb-12"
+                    transition={{ duration: 0.6 }}
+                    className="text-center mb-10"
                 >
-                    <div className="inline-flex relative group">
-                        <div className="absolute inset-0 bg-orange-600/20 blur-2xl rounded-full group-hover:bg-orange-600/40 transition-all animate-pulse" />
-                        <div className="relative w-24 h-24 rounded-[2.5rem] bg-neutral-900 border-2 border-orange-600/50 flex items-center justify-center text-orange-500 shadow-2xl transition-all group-hover:border-orange-600 group-hover:scale-105">
-                            <ChefHat className="w-10 h-10 group-hover:rotate-12 transition-transform duration-500" />
+                    {/* Logo */}
+                    <div className="inline-flex relative mb-8 group">
+                        <motion.div
+                            animate={{ scale: [1, 1.1, 1], opacity: [0.2, 0.4, 0.2] }}
+                            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+                            className="absolute inset-0 -m-4 bg-orange-500/20 blur-3xl rounded-full"
+                        />
+                        <div className="relative w-20 h-20 rounded-[1.75rem] bg-gradient-to-br from-neutral-900 to-neutral-950 border border-white/10 flex items-center justify-center shadow-2xl group-hover:scale-105 transition-transform duration-500">
+                            <ChefHat className="w-9 h-9 text-orange-500" />
                         </div>
                     </div>
-                    <div>
-                        <h1 className="text-5xl font-black tracking-tighter uppercase italic">
-                            Staff <span className="text-orange-600">Terminal</span>
-                        </h1>
-                        <div className="flex items-center justify-center gap-3 mt-4">
-                            <Badge variant="outline" className="bg-orange-600/10 text-orange-600 border-orange-600/20 px-4 py-1.5 font-black uppercase text-[10px] tracking-[0.3em] italic">
-                                SECURE_LINK v2.0
-                            </Badge>
-                        </div>
-                    </div>
+
+                    <h1 className="text-4xl font-black tracking-tighter mb-3">
+                        Staff <span className="bg-clip-text text-transparent bg-gradient-to-r from-orange-400 to-amber-500">Portal</span>
+                    </h1>
+                    <p className="text-sm text-neutral-500 font-medium">Secure access for team members</p>
                 </motion.div>
 
-                <div className="relative group">
-                    <div className="absolute -inset-1 bg-gradient-to-b from-orange-600/20 to-transparent rounded-[3rem] blur opacity-25 group-hover:opacity-40 transition-opacity" />
-                    <Card className="bg-neutral-950/80 backdrop-blur-3xl border-2 border-neutral-900 rounded-[3rem] p-10 lg:p-14 shadow-[0_40px_100px_rgba(0,0,0,0.8)] relative overflow-hidden">
-                        <div className="absolute top-0 right-0 w-40 h-40 bg-orange-600/[0.03] rounded-bl-full pointer-events-none" />
+                {/* Main Card */}
+                <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5, delay: 0.2 }}
+                    className="relative"
+                >
+                    <div className="absolute -inset-px bg-gradient-to-b from-white/10 to-transparent rounded-[2.5rem] pointer-events-none" />
+                    <div className="bg-neutral-950/80 backdrop-blur-2xl border border-white/5 rounded-[2.5rem] p-8 lg:p-10 shadow-[0_30px_60px_rgba(0,0,0,0.5)] relative overflow-hidden">
+
+                        {/* Status Bar */}
+                        <div className="flex items-center justify-between mb-8 pb-6 border-b border-white/5">
+                            <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                                    <motion.div
+                                        animate={{ opacity: [1, 0.5, 1] }}
+                                        transition={{ duration: 2, repeat: Infinity }}
+                                        className="w-1.5 h-1.5 rounded-full bg-emerald-500"
+                                    />
+                                    <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-wider">Online</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 text-neutral-600">
+                                    <Wifi className="w-3 h-3" />
+                                    <span className="text-[10px] font-bold uppercase tracking-wider">Secure</span>
+                                </div>
+                            </div>
+                            <div className="text-right">
+                                <span className="text-lg font-black tabular-nums tracking-tight text-white">
+                                    {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
+                                </span>
+                            </div>
+                        </div>
 
                         <AnimatePresence mode="wait">
-                            {step === 'restaurant' ? (
+                            {step === 'email' ? (
                                 <motion.form
-                                    key="restaurant"
-                                    initial={{ opacity: 0, scale: 0.95 }}
-                                    animate={{ opacity: 1, scale: 1 }}
-                                    exit={{ opacity: 0, scale: 0.95 }}
-                                    onSubmit={handleRestaurantSubmit}
-                                    className="space-y-10 min-h-[440px] flex flex-col justify-center"
+                                    key="email"
+                                    initial={{ opacity: 0, x: -20 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    exit={{ opacity: 0, x: 20 }}
+                                    transition={{ duration: 0.3 }}
+                                    onSubmit={handleEmailSubmit}
+                                    className="space-y-6"
                                 >
-                                    <div className="space-y-4 text-center">
-                                        <h3 className="text-xs font-black text-neutral-500 uppercase tracking-[0.5em] italic">Access Point Identity</h3>
-                                        <p className="text-lg font-medium text-neutral-400">Initialize <span className="text-white font-black italic uppercase">Terminal Sync</span></p>
+                                    <div className="text-center space-y-2">
+                                        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/5 border border-white/5 mb-4">
+                                            <Mail className="w-4 h-4 text-orange-500" />
+                                            <span className="text-xs font-bold text-white uppercase tracking-wider">Step 1 of 2</span>
+                                        </div>
+                                        <h2 className="text-xl font-bold text-white">Enter Your Email</h2>
+                                        <p className="text-sm text-neutral-500">The email your manager used to invite you</p>
                                     </div>
 
                                     <div className="relative group">
-                                        <Building2 className="absolute left-8 top-1/2 -translate-y-1/2 w-6 h-6 text-neutral-700 group-focus-within:text-orange-600 transition-colors" />
-                                        <input
-                                            placeholder="e.g. CORE-MATRIX-01"
-                                            value={restaurantSlug}
-                                            onChange={(e: any) => setRestaurantSlug(e.target.value)}
-                                            className="w-full h-20 bg-black border-2 border-neutral-900 rounded-3xl pl-20 pr-10 text-xl font-black italic tracking-widest text-white placeholder:text-neutral-800 focus:border-orange-600 transition-all outline-none"
-                                            required
-                                            autoFocus
-                                        />
-                                    </div>
-
-                                    <Button
-                                        type="submit"
-                                        className="h-20 rounded-3xl text-sm font-black uppercase tracking-[0.4em] bg-orange-600 hover:bg-orange-500 text-white shadow-2xl shadow-orange-600/30 font-black italic border-none group transition-all"
-                                        disabled={!restaurantSlug.trim()}
-                                    >
-                                        Establish Link
-                                    </Button>
-
-                                    <div className="text-center">
-                                        <Link href="/login" className="text-[10px] font-black text-neutral-600 hover:text-white transition-colors uppercase tracking-[0.4em] flex items-center justify-center gap-3 italic group">
-                                            <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-                                            Return to Central Hub
-                                        </Link>
-                                    </div>
-                                </motion.form>
-                            ) : (
-                                <motion.div
-                                    key="pin"
-                                    initial={{ opacity: 0, scale: 0.95 }}
-                                    animate={{ opacity: 1, scale: 1 }}
-                                    exit={{ opacity: 0, scale: 0.95 }}
-                                    className="space-y-10"
-                                >
-                                    <div className="flex items-center justify-between">
-                                        <button
-                                            onClick={() => { setStep('restaurant'); setPin(''); setError(null); }}
-                                            className="text-[10px] font-black text-neutral-600 hover:text-white uppercase tracking-[0.3em] transition-colors flex items-center gap-2 italic group"
-                                        >
-                                            <ArrowLeft className="w-3.5 h-3.5 group-hover:-translate-x-1 transition-transform" />
-                                            {restaurantSlug.toUpperCase()}
-                                        </button>
-                                        <Badge variant="outline" className="border-orange-600/30 text-orange-500 font-black text-[9px] uppercase tracking-widest italic animate-pulse">
-                                            Waiting for Cipher
-                                        </Badge>
-                                    </div>
-
-                                    {/* PIN Display */}
-                                    <div className="flex justify-center gap-6 py-10 relative">
-                                        <div className="absolute inset-0 bg-white/[0.02] blur-xl rounded-full pointer-events-none" />
-                                        {[0, 1, 2, 3].map((i) => (
-                                            <motion.div
-                                                key={i}
-                                                initial={false}
-                                                animate={{
-                                                    scale: pin.length > i ? 1.4 : 1,
-                                                    boxShadow: pin.length > i ? '0 0 30px rgba(249,115,22,0.4)' : 'none'
-                                                }}
-                                                className={cn(
-                                                    "w-6 h-6 rounded-lg rotate-45 border-2 transition-all duration-300",
-                                                    pin.length > i
-                                                        ? "bg-orange-600 border-orange-600"
-                                                        : "bg-neutral-900 border-neutral-800"
-                                                )}
+                                        <div className="absolute -inset-0.5 bg-gradient-to-r from-orange-500/20 to-amber-500/20 rounded-2xl blur opacity-0 group-focus-within:opacity-100 transition-opacity" />
+                                        <div className="relative">
+                                            <Mail className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-600 group-focus-within:text-orange-500 transition-colors" />
+                                            <input
+                                                type="email"
+                                                placeholder="your@email.com"
+                                                value={email}
+                                                onChange={(e) => setEmail(e.target.value)}
+                                                className="w-full h-16 bg-neutral-900/50 border border-white/10 rounded-2xl pl-14 pr-5 text-lg font-bold text-white placeholder:text-neutral-700 focus:border-orange-500/50 focus:bg-neutral-900 transition-all outline-none"
+                                                required
+                                                autoFocus
                                             />
-                                        ))}
+                                        </div>
                                     </div>
 
                                     {error && (
                                         <motion.div
                                             initial={{ opacity: 0, y: -10 }}
                                             animate={{ opacity: 1, y: 0 }}
-                                            className="p-5 bg-rose-600/10 border-2 border-rose-600/20 rounded-2xl"
+                                            className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-center"
                                         >
-                                            <p className="text-center text-[10px] font-black text-rose-500 uppercase tracking-[0.3em] italic">
-                                                ERROR: {error}
-                                            </p>
+                                            <p className="text-sm font-semibold text-rose-400">{error}</p>
+                                        </motion.div>
+                                    )}
+
+                                    {/* Info Cards */}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/10">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <div className="w-5 h-5 rounded-full bg-emerald-500/20 flex items-center justify-center">
+                                                    <span className="text-[10px] font-bold text-emerald-400">6</span>
+                                                </div>
+                                                <span className="text-xs font-bold text-emerald-400">New Staff</span>
+                                            </div>
+                                            <p className="text-[10px] text-neutral-500 leading-relaxed">Use 6-digit PIN from invitation email</p>
+                                        </div>
+                                        <div className="p-3 rounded-xl bg-blue-500/5 border border-blue-500/10">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <div className="w-5 h-5 rounded-full bg-blue-500/20 flex items-center justify-center">
+                                                    <span className="text-[10px] font-bold text-blue-400">4</span>
+                                                </div>
+                                                <span className="text-xs font-bold text-blue-400">Existing Staff</span>
+                                            </div>
+                                            <p className="text-[10px] text-neutral-500 leading-relaxed">Use your 4-digit permanent PIN</p>
+                                        </div>
+                                    </div>
+
+                                    <button
+                                        type="submit"
+                                        disabled={!email.trim() || isLoading}
+                                        className="w-full h-14 rounded-2xl font-bold uppercase text-sm tracking-widest bg-gradient-to-r from-orange-500 to-amber-600 text-white shadow-lg shadow-orange-500/20 hover:shadow-orange-500/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-3"
+                                    >
+                                        {isLoading ? (
+                                            <Loader2 className="w-5 h-5 animate-spin" />
+                                        ) : (
+                                            <>
+                                                <Zap className="w-4 h-4" />
+                                                Continue
+                                            </>
+                                        )}
+                                    </button>
+
+                                    <div className="text-center pt-2">
+                                        <Link href="/login" className="text-xs font-semibold text-neutral-500 hover:text-white transition-colors flex items-center justify-center gap-2">
+                                            <ArrowLeft className="w-3.5 h-3.5" />
+                                            Back to Admin Login
+                                        </Link>
+                                    </div>
+                                </motion.form>
+                            ) : (
+                                <motion.div
+                                    key="pin"
+                                    initial={{ opacity: 0, x: 20 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    exit={{ opacity: 0, x: -20 }}
+                                    transition={{ duration: 0.3 }}
+                                    className="space-y-6"
+                                >
+                                    {/* Back Button & Staff Info */}
+                                    <div className="flex items-center justify-between">
+                                        <button
+                                            onClick={() => { setStep('email'); setPin(''); setError(null); setStaffPreview(null); }}
+                                            className="flex items-center gap-2 text-xs font-semibold text-neutral-500 hover:text-white transition-colors group"
+                                        >
+                                            <ArrowLeft className="w-3.5 h-3.5 group-hover:-translate-x-1 transition-transform" />
+                                            Change
+                                        </button>
+                                        <Badge className={cn(
+                                            "px-3 py-1 font-bold text-[10px] uppercase tracking-wider",
+                                            staffPreview?.needs_setup
+                                                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                                                : "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                                        )}>
+                                            {staffPreview?.name || 'Staff'}
+                                        </Badge>
+                                    </div>
+
+                                    {/* Staff Info Card */}
+                                    {staffPreview?.role && (
+                                        <div className="p-3 rounded-xl bg-neutral-900/50 border border-white/5 flex items-center justify-between">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-full bg-orange-500/10 flex items-center justify-center">
+                                                    <User className="w-5 h-5 text-orange-500" />
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-bold text-white">{staffPreview.name}</p>
+                                                    <p className="text-[10px] text-neutral-500 uppercase tracking-wider">{staffPreview.role} • {staffPreview.restaurant?.name}</p>
+                                                </div>
+                                            </div>
+                                            <Badge className={cn(
+                                                "px-2 py-1 text-[9px] font-bold uppercase",
+                                                staffPreview.needs_setup
+                                                    ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                                                    : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                                            )}>
+                                                {staffPreview.needs_setup ? 'New' : 'Active'}
+                                            </Badge>
+                                        </div>
+                                    )}
+
+                                    {/* PIN Header */}
+                                    <div className="text-center space-y-2">
+                                        <div className={cn(
+                                            "inline-flex items-center gap-2 px-4 py-2 rounded-2xl border mb-4",
+                                            staffPreview?.needs_setup
+                                                ? "bg-emerald-500/5 border-emerald-500/10"
+                                                : "bg-blue-500/5 border-blue-500/10"
+                                        )}>
+                                            <KeyRound className={cn(
+                                                "w-4 h-4",
+                                                staffPreview?.needs_setup ? "text-emerald-400" : "text-blue-400"
+                                            )} />
+                                            <span className="text-xs font-bold text-white uppercase tracking-wider">Step 2 of 2</span>
+                                        </div>
+                                        <h2 className="text-xl font-bold text-white">
+                                            {staffPreview?.needs_setup ? 'Enter Temporary PIN' : 'Enter Your PIN'}
+                                        </h2>
+                                        <p className="text-sm text-neutral-500">
+                                            {staffPreview?.needs_setup
+                                                ? '6-digit PIN from your invitation email'
+                                                : '4-digit permanent access code'}
+                                        </p>
+                                    </div>
+
+                                    {/* PIN Display */}
+                                    <div className="flex justify-center gap-3 py-4">
+                                        {Array.from({ length: staffPreview?.needs_setup ? 6 : 4 }).map((_, i) => (
+                                            <motion.div
+                                                key={i}
+                                                animate={{
+                                                    scale: pin.length > i ? 1 : 0.9,
+                                                    opacity: pin.length > i ? 1 : 0.3
+                                                }}
+                                                className={cn(
+                                                    "w-12 h-12 rounded-xl border-2 flex items-center justify-center transition-all duration-200",
+                                                    pin.length > i
+                                                        ? "bg-orange-500 border-orange-500 shadow-lg shadow-orange-500/30"
+                                                        : "bg-neutral-900/50 border-neutral-800"
+                                                )}
+                                            >
+                                                {pin.length > i && (
+                                                    <motion.div
+                                                        initial={{ scale: 0 }}
+                                                        animate={{ scale: 1 }}
+                                                        className="w-2.5 h-2.5 rounded-full bg-white"
+                                                    />
+                                                )}
+                                            </motion.div>
+                                        ))}
+                                    </div>
+
+                                    {/* Error Message */}
+                                    {error && (
+                                        <motion.div
+                                            initial={{ opacity: 0, y: -10 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-center"
+                                        >
+                                            <p className="text-sm font-semibold text-rose-400">{error}</p>
                                         </motion.div>
                                     )}
 
                                     {/* PIN Pad */}
-                                    <div className="grid grid-cols-3 gap-4">
+                                    <div className="grid grid-cols-3 gap-3">
                                         {pinPadNumbers.map((num, i) => (
                                             <button
                                                 key={i}
                                                 onClick={() => num && handlePinPress(num)}
                                                 disabled={isLoading || !num}
                                                 className={cn(
-                                                    "h-20 rounded-3xl text-2xl font-black transition-all flex items-center justify-center active:scale-95 group relative",
+                                                    "h-14 rounded-xl font-bold text-xl transition-all flex items-center justify-center active:scale-95",
                                                     num === 'delete'
-                                                        ? "bg-neutral-900/50 text-neutral-600 hover:text-rose-500 hover:border-rose-600 animate-in"
+                                                        ? "bg-neutral-900/50 text-neutral-500 hover:text-rose-500 hover:bg-rose-500/10"
                                                         : num
-                                                            ? "bg-neutral-900 border-2 border-neutral-900 hover:border-orange-600/50 hover:bg-neutral-800 text-white shadow-xl italic"
+                                                            ? "bg-neutral-900 border border-white/5 hover:border-orange-500/30 hover:bg-neutral-800 text-white"
                                                             : "invisible pointer-events-none",
                                                     isLoading && "opacity-50 pointer-events-none"
                                                 )}
                                             >
                                                 {num === 'delete' ? (
-                                                    <Delete className="w-8 h-8 group-hover:scale-110 transition-transform" />
+                                                    <Delete className="w-5 h-5" />
                                                 ) : (
                                                     num
                                                 )}
                                             </button>
                                         ))}
                                     </div>
+
+                                    {/* Loading Overlay */}
+                                    {isLoading && (
+                                        <motion.div
+                                            initial={{ opacity: 0 }}
+                                            animate={{ opacity: 1 }}
+                                            className="absolute inset-0 bg-neutral-950/80 backdrop-blur-sm flex flex-col items-center justify-center rounded-[2.5rem]"
+                                        >
+                                            <motion.div
+                                                animate={{ rotate: 360 }}
+                                                transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+                                                className="w-16 h-16 rounded-full border-2 border-orange-500 border-t-transparent mb-6"
+                                            />
+                                            <p className="text-sm font-bold text-white uppercase tracking-widest">Verifying...</p>
+                                        </motion.div>
+                                    )}
                                 </motion.div>
                             )}
                         </AnimatePresence>
-                    </Card>
-                </div>
+                    </div>
+                </motion.div>
 
-                {/* Footer Metadata */}
+                {/* Footer */}
                 <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    transition={{ delay: 0.5 }}
-                    className="mt-12 text-center"
+                    transition={{ delay: 0.6 }}
+                    className="mt-8 text-center flex items-center justify-center gap-4"
                 >
-                    <p className="text-[9px] font-black text-white/20 uppercase tracking-[0.5em] italic">
-                        Node Identity: <span className="text-white/40">{typeof window !== 'undefined' ? window.location.hostname : 'SERVER'}</span> • Signal Strength: Optimal
-                    </p>
+                    <div className="flex items-center gap-2 text-neutral-600">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span className="text-[10px] font-bold uppercase tracking-widest">End-to-end encrypted</span>
+                    </div>
                 </motion.div>
             </div>
         </div>
