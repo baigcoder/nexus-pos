@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { generateApiKey, listApiKeys, revokeApiKey } from '@/lib/api-keys'
 import { createClient } from '@/lib/supabase/server'
+import { requireOwner } from '@/lib/api-auth'
 
 // GET /api/settings/api-keys - List API keys for a restaurant
 export async function GET(request: NextRequest) {
     try {
+        const { auth, response } = await requireOwner()(request)
+        if (response) return response
+
         const { searchParams } = new URL(request.url)
         const restaurantId = searchParams.get('restaurant_id')
 
@@ -59,6 +63,9 @@ export async function GET(request: NextRequest) {
 // POST /api/settings/api-keys - Create a new API key
 export async function POST(request: NextRequest) {
     try {
+        const { auth, response } = await requireOwner()(request)
+        if (response) return response
+
         const body = await request.json()
         const {
             restaurant_id,

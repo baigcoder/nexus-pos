@@ -1,315 +1,389 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
-    ChefHat,
-    Clock,
-    CheckCircle2,
-    Loader2,
-    RefreshCw,
-    User,
-    UtensilsCrossed,
-    Bell,
-    Grid3X3
+  ChefHat,
+  Clock,
+  CheckCircle2,
+  Loader2,
+  RefreshCw,
+  Bell,
+  Grid3X3
 } from 'lucide-react'
-import { useAuthStore } from '@/stores'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/toast'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 
 interface OrderItem {
-    id: string
-    menu_item: {
-        name: string
-    }
-    quantity: number
-    notes?: string
-    status: string
+  id: string
+  menu_item: {
+    name: string
+  }
+  quantity: number
+  notes?: string
+  status: string
 }
 
 interface Order {
-    id: string
-    table_id: string
-    tables: {
-        table_number: number
-    }
-    status: string
-    created_at: string
-    order_items: OrderItem[]
-    staff: {
-        name: string
-    }
+  id: string
+  table_id: string
+  tables: {
+    table_number: number
+  } | null
+  status: string
+  created_at: string
+  order_items: OrderItem[]
 }
 
 const statusConfig: Record<string, { color: string; label: string; bgColor: string }> = {
-    pending: { color: 'text-amber-400', bgColor: 'bg-amber-500/10 border-amber-500/20', label: 'Pending' },
-    preparing: { color: 'text-blue-400', bgColor: 'bg-blue-500/10 border-blue-500/20', label: 'Preparing' },
-    ready: { color: 'text-emerald-400', bgColor: 'bg-emerald-500/10 border-emerald-500/20', label: 'Ready' },
-    served: { color: 'text-neutral-400', bgColor: 'bg-neutral-500/10 border-neutral-500/20', label: 'Served' },
+  pending: { color: 'text-amber-400', bgColor: 'bg-amber-500/10 border-amber-500/20', label: 'Pending' },
+  preparing: { color: 'text-blue-400', bgColor: 'bg-blue-500/10 border-blue-500/20', label: 'Preparing' },
+  ready: { color: 'text-emerald-400', bgColor: 'bg-emerald-500/10 border-emerald-500/20', label: 'Ready' },
+  served: { color: 'text-[var(--text-muted)]', bgColor: 'bg-[var(--surface-hover)]0/10 border-[var(--border)]', label: 'Served' },
 }
 
+// Standalone Kitchen View - no auth store dependency
 export default function KitchenViewPage() {
-    const { restaurant, staff } = useAuthStore()
-    const { success } = useToast()
-    const supabase = createClient()
+  const { success } = useToast()
+  const supabase = createClient()
 
-    const [orders, setOrders] = useState<Order[]>([])
-    const [filter, setFilter] = useState<string>('all')
-    const [isLoading, setIsLoading] = useState(true)
-    const [lastUpdate, setLastUpdate] = useState(new Date())
+  const [orders, setOrders] = useState<Order[]>([])
+  const [filter, setFilter] = useState<string>('all')
+  const [isLoading, setIsLoading] = useState(true)
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [restaurantId, setRestaurantId] = useState<string | null>(null)
+  const syncIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const initialLoadDone = useRef(false)
 
-    useEffect(() => {
-        if (restaurant?.id) {
-            loadOrders()
-            // Set up real-time subscription
-            const channel = supabase
-                .channel('kitchen-orders')
-                .on('postgres_changes',
-                    { event: '*', schema: 'public', table: 'orders', filter: `restaurant_id=eq.${restaurant.id}` },
-                    () => {
-                        loadOrders()
-                    }
-                )
-                .on('postgres_changes',
-                    { event: '*', schema: 'public', table: 'order_items' },
-                    () => {
-                        loadOrders()
-                    }
-                )
-                .subscribe()
+  const pendingCount = orders.filter(o => o.status === 'pending').length
+  const preparingCount = orders.filter(o => o.status === 'preparing').length
+  const readyCount = orders.filter(o => o.status === 'ready').length
 
-            return () => {
-                supabase.removeChannel(channel)
-            }
+  // Get restaurant ID once on mount
+  useEffect(() => {
+    const getRestaurantId = async () => {
+      // Try auth store first (for persistent users)
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          const { data: rest } = await supabase
+            .from('restaurants')
+            .select('id')
+            .eq('owner_id', user.id)
+            .single()
+          if (rest) {
+            setRestaurantId(rest.id)
+            return
+          }
         }
-    }, [restaurant?.id])
+      } catch (e) {
+        console.warn('Auth check failed')
+      }
 
-    async function loadOrders() {
-        try {
-            const { data } = await supabase
-                .from('orders')
-                .select(`
-                    id,
-                    table_id,
-                    tables(table_number),
-                    status,
-                    created_at,
-                    staff(name),
-                    order_items(
-                        id,
-                        menu_item:menu_items(name),
-                        quantity,
-                        notes,
-                        status
-                    )
-                `)
-                .eq('restaurant_id', restaurant!.id)
-                .in('status', ['pending', 'preparing', 'ready'])
-                .order('created_at', { ascending: false })
-
-            if (data) {
-                setOrders(data as any)
-            }
-            setLastUpdate(new Date())
-        } catch (err) {
-            console.error('Error loading orders:', err)
-        } finally {
-            setIsLoading(false)
+      // Check localStorage for staff login
+      try {
+        const authStore = localStorage.getItem('orderflow-auth')
+        if (authStore) {
+          const parsed = JSON.parse(authStore)
+          const restaurant = parsed.state?.restaurant
+          if (restaurant?.id) {
+            setRestaurantId(restaurant.id)
+            return
+          }
         }
+      } catch (e) {
+        console.warn('LocalStorage check failed')
+      }
     }
 
-    const markAsPickedUp = async (orderId: string) => {
-        await supabase
-            .from('orders')
-            .update({ status: 'served' })
-            .eq('id', orderId)
+    getRestaurantId()
+  }, [supabase])
 
-        success('Order Picked Up', 'Order marked as served')
-        loadOrders()
+  // Load orders - called only when restaurantId is available
+  const loadOrders = useCallback(async () => {
+    if (!restaurantId) return
+
+    setIsSyncing(true)
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+          id,
+          table_id,
+          tables(table_number),
+          status,
+          created_at,
+          order_items(
+            id,
+            menu_item:menu_items(name),
+            quantity,
+            notes,
+            status
+          )
+        `)
+        .eq('restaurant_id', restaurantId)
+        .in('status', ['pending', 'preparing', 'ready'])
+        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+        .order('created_at', { ascending: false })
+        .limit(100)
+
+      if (error) {
+        console.error('Orders fetch error:', error)
+        const fallback = await supabase
+          .from('orders')
+          .select('*')
+          .eq('restaurant_id', restaurantId)
+          .in('status', ['pending', 'preparing', 'ready'])
+          .order('created_at', { ascending: false })
+          .limit(100)
+
+        if (fallback.data) {
+          setOrders(fallback.data as unknown as Order[])
+        }
+      } else if (data) {
+        setOrders(data as unknown as Order[])
+      }
+
+      setLastUpdate(new Date())
+    } catch (err) {
+      console.error('Error loading orders:', err)
+    } finally {
+      setIsLoading(false)
+      setIsSyncing(false)
     }
+  }, [restaurantId, supabase])
 
-    const getTimeAgo = (dateStr: string) => {
-        const mins = Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000)
-        if (mins < 1) return 'Just now'
-        if (mins < 60) return `${mins}m ago`
-        return `${Math.floor(mins / 60)}h ${mins % 60}m ago`
+  // Initial load and periodic sync
+  useEffect(() => {
+    if (!restaurantId) return
+
+    initialLoadDone.current = true
+    loadOrders()
+
+    // Manual sync every 30 seconds
+    syncIntervalRef.current = setInterval(() => {
+      loadOrders()
+    }, 30000)
+
+    return () => {
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current)
+      }
     }
+  }, [restaurantId, loadOrders])
 
-    const filteredOrders = orders.filter(order =>
-        filter === 'all' || order.status === filter
-    )
+  const markAsPickedUp = async (orderId: string) => {
+    // Optimistic update
+    setOrders(prev => prev.filter(o => o.id !== orderId))
 
-    const pendingCount = orders.filter(o => o.status === 'pending').length
-    const preparingCount = orders.filter(o => o.status === 'preparing').length
-    const readyCount = orders.filter(o => o.status === 'ready').length
+    await supabase
+      .from('orders')
+      .update({ status: 'served' })
+      .eq('id', orderId)
 
-    if (isLoading) {
-        return (
-            <div className="min-h-screen bg-[#030303] flex items-center justify-center">
-                <div className="flex items-center gap-3 text-neutral-400">
-                    <Loader2 className="w-6 h-6 animate-spin" />
-                    <span>Loading kitchen view...</span>
-                </div>
-            </div>
-        )
-    }
+    success('Order Picked Up', 'Order marked as served')
+  }
 
+  const getTimeAgo = (dateStr: string) => {
+    const mins = Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000)
+    if (mins < 1) return 'Just now'
+    if (mins < 60) return `${mins}m ago`
+    return `${Math.floor(mins / 60)}h ${mins % 60}m ago`
+  }
+
+  const filteredOrders = orders.filter(order =>
+    filter === 'all' || order.status === filter
+  )
+
+  if (!restaurantId) {
     return (
-        <div className="min-h-screen bg-[#030303] text-white p-6">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-                <div>
-                    <h1 className="text-2xl font-black">
-                        Kitchen <span className="text-orange-500">View</span>
-                    </h1>
-                    <p className="text-sm text-neutral-500">Live order status from kitchen</p>
-                </div>
-
-                <div className="flex items-center gap-4">
-                    <div className="text-xs text-neutral-500">
-                        Last update: {lastUpdate.toLocaleTimeString()}
-                    </div>
-                    <button
-                        onClick={loadOrders}
-                        className="p-2 bg-neutral-900 border border-white/10 rounded-xl hover:bg-neutral-800 transition-colors"
-                    >
-                        <RefreshCw className="w-4 h-4" />
-                    </button>
-                </div>
-            </div>
-
-            {/* Stats */}
-            <div className="grid grid-cols-3 gap-4 mb-6">
-                <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-2xl">
-                    <div className="flex items-center justify-between">
-                        <span className="text-sm text-amber-400 font-medium">Pending</span>
-                        <Clock className="w-4 h-4 text-amber-400" />
-                    </div>
-                    <p className="text-3xl font-black text-amber-400 mt-2">{pendingCount}</p>
-                </div>
-                <div className="p-4 bg-blue-500/5 border border-blue-500/20 rounded-2xl">
-                    <div className="flex items-center justify-between">
-                        <span className="text-sm text-blue-400 font-medium">Preparing</span>
-                        <ChefHat className="w-4 h-4 text-blue-400" />
-                    </div>
-                    <p className="text-3xl font-black text-blue-400 mt-2">{preparingCount}</p>
-                </div>
-                <div className="p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-2xl">
-                    <div className="flex items-center justify-between">
-                        <span className="text-sm text-emerald-400 font-medium">Ready</span>
-                        <Bell className="w-4 h-4 text-emerald-400" />
-                    </div>
-                    <p className="text-3xl font-black text-emerald-400 mt-2">{readyCount}</p>
-                </div>
-            </div>
-
-            {/* Filter */}
-            <div className="flex gap-2 mb-6">
-                {[
-                    { value: 'all', label: 'All Orders', count: orders.length },
-                    { value: 'pending', label: 'Pending', count: pendingCount },
-                    { value: 'preparing', label: 'Preparing', count: preparingCount },
-                    { value: 'ready', label: 'Ready', count: readyCount },
-                ].map(f => (
-                    <button
-                        key={f.value}
-                        onClick={() => setFilter(f.value)}
-                        className={cn(
-                            "px-4 py-2 rounded-xl text-sm font-bold transition-colors flex items-center gap-2",
-                            filter === f.value
-                                ? "bg-orange-500 text-white"
-                                : "bg-neutral-900/50 text-neutral-400 hover:text-white"
-                        )}
-                    >
-                        {f.label}
-                        <span className="text-[10px] px-1.5 py-0.5 bg-black/20 rounded-full">{f.count}</span>
-                    </button>
-                ))}
-            </div>
-
-            {/* Orders Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <AnimatePresence>
-                    {filteredOrders.map(order => {
-                        const config = statusConfig[order.status] || statusConfig.pending
-                        return (
-                            <motion.div
-                                key={order.id}
-                                layout
-                                initial={{ opacity: 0, scale: 0.9 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.9 }}
-                                className={cn(
-                                    "p-4 border rounded-2xl",
-                                    config.bgColor,
-                                    order.status === 'ready' && "ring-2 ring-emerald-500 animate-pulse"
-                                )}
-                            >
-                                {/* Order Header */}
-                                <div className="flex items-center justify-between mb-3">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-10 h-10 bg-neutral-800 rounded-xl flex items-center justify-center">
-                                            <Grid3X3 className="w-5 h-5 text-orange-500" />
-                                        </div>
-                                        <div>
-                                            <p className="font-bold">Table {order.tables?.table_number}</p>
-                                            <p className="text-xs text-neutral-500">#{order.id.slice(-6)}</p>
-                                        </div>
-                                    </div>
-                                    <Badge className={cn("text-xs font-bold", config.bgColor, config.color)}>
-                                        {config.label}
-                                    </Badge>
-                                </div>
-
-                                {/* Order Items */}
-                                <div className="space-y-2 mb-3">
-                                    {order.order_items?.map(item => (
-                                        <div key={item.id} className="flex items-center justify-between text-sm">
-                                            <div className="flex items-center gap-2">
-                                                <span className="w-5 h-5 bg-neutral-800 rounded text-xs flex items-center justify-center font-bold">
-                                                    {item.quantity}
-                                                </span>
-                                                <span className="text-neutral-300">{item.menu_item?.name}</span>
-                                            </div>
-                                            {item.notes && (
-                                                <span className="text-xs text-amber-400 italic">{item.notes}</span>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-
-                                {/* Footer */}
-                                <div className="flex items-center justify-between pt-3 border-t border-white/10">
-                                    <div className="flex items-center gap-2 text-xs text-neutral-500">
-                                        <Clock className="w-3 h-3" />
-                                        {getTimeAgo(order.created_at)}
-                                    </div>
-
-                                    {order.status === 'ready' && (
-                                        <button
-                                            onClick={() => markAsPickedUp(order.id)}
-                                            className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 rounded-lg text-xs font-bold flex items-center gap-1.5"
-                                        >
-                                            <CheckCircle2 className="w-3 h-3" />
-                                            Pick Up
-                                        </button>
-                                    )}
-                                </div>
-                            </motion.div>
-                        )
-                    })}
-                </AnimatePresence>
-            </div>
-
-            {filteredOrders.length === 0 && (
-                <div className="text-center py-20">
-                    <ChefHat className="w-16 h-16 mx-auto mb-4 text-neutral-700" />
-                    <h3 className="text-lg font-bold text-neutral-500">No Active Orders</h3>
-                    <p className="text-sm text-neutral-600">Kitchen is clear!</p>
-                </div>
-            )}
+      <div className="min-h-screen bg-[#030303] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4 text-[var(--text-muted)]">
+          <Loader2 className="w-8 h-8 animate-spin text-brand" />
+          <span className="text-sm">Loading...</span>
         </div>
+      </div>
     )
+  }
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#030303] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4 text-[var(--text-muted)]">
+          <Loader2 className="w-8 h-8 animate-spin text-brand" />
+          <span className="text-sm">Loading kitchen view...</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-[#030303] text-[var(--text-primary)] p-6">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-black flex items-center gap-2">
+            <ChefHat className="w-7 h-7 text-brand" />
+            Kitchen <span className="text-brand">View</span>
+          </h1>
+          <p className="text-sm text-[var(--text-muted)] mt-1">Live order status from kitchen</p>
+        </div>
+
+        <div className="flex items-center gap-4">
+          {isSyncing && (
+            <div className="flex items-center gap-2 text-xs text-orange-400">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Syncing...
+            </div>
+          )}
+          {lastUpdate && (
+            <div className="text-xs text-[var(--text-muted)]">
+              Updated: {lastUpdate.toLocaleTimeString()}
+            </div>
+          )}
+          <button
+            onClick={loadOrders}
+            disabled={isSyncing}
+            className={cn(
+              "p-2.5 bg-[var(--surface-raised)] border border-white/10 rounded-xl hover:bg-[var(--surface-active)] transition-all flex items-center gap-2",
+              isSyncing && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            <RefreshCw className={cn("w-4 h-4", isSyncing && "animate-spin")} />
+            <span className="text-xs font-medium">Refresh</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-2xl">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-amber-400 font-medium">Pending</span>
+            <Clock className="w-4 h-4 text-amber-400" />
+          </div>
+          <p className="text-3xl font-black text-amber-400 mt-2">{pendingCount}</p>
+        </div>
+        <div className="p-4 bg-blue-500/5 border border-blue-500/20 rounded-2xl">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-blue-400 font-medium">Preparing</span>
+            <Bell className="w-4 h-4 text-blue-400" />
+          </div>
+          <p className="text-3xl font-black text-blue-400 mt-2">{preparingCount}</p>
+        </div>
+        <div className="p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-2xl">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-emerald-400 font-medium">Ready</span>
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          </div>
+          <p className="text-3xl font-black text-emerald-400 mt-2">{readyCount}</p>
+        </div>
+      </div>
+
+      {/* Filter */}
+      <div className="flex gap-2 mb-6">
+        {[
+          { value: 'all', label: 'All Orders', count: orders.length },
+          { value: 'pending', label: 'Pending', count: pendingCount },
+          { value: 'preparing', label: 'Preparing', count: preparingCount },
+          { value: 'ready', label: 'Ready', count: readyCount },
+        ].map(f => (
+          <button
+            key={f.value}
+            onClick={() => setFilter(f.value)}
+            className={cn(
+              "px-4 py-2 rounded-xl text-sm font-bold transition-colors flex items-center gap-2",
+              filter === f.value
+                ? "bg-brand text-[var(--text-primary)]"
+                : "bg-[var(--surface-raised)]/50 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+            )}
+          >
+            {f.label}
+            <span className="text-[10px] px-1.5 py-0.5 bg-[var(--surface)]/20 rounded-full">{f.count}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Orders Grid - No animations */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filteredOrders.map(order => {
+          const config = statusConfig[order.status] || statusConfig.pending
+          return (
+            <div
+              key={order.id}
+              className={cn(
+                "p-4 border rounded-2xl transition-all",
+                config.bgColor,
+                order.status === 'ready' && "ring-2 ring-emerald-500"
+              )}
+            >
+              {/* Order Header */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-10 h-10 bg-[var(--surface-active)] rounded-xl flex items-center justify-center">
+                    <Grid3X3 className="w-5 h-5 text-brand" />
+                  </div>
+                  <div>
+                    <p className="font-bold">Table {order.tables?.table_number || 'N/A'}</p>
+                    <p className="text-xs text-[var(--text-muted)]">#{order.id.slice(-6)}</p>
+                  </div>
+                </div>
+                <Badge className={cn("text-xs font-bold", config.bgColor, config.color)}>
+                  {config.label}
+                </Badge>
+              </div>
+
+              {/* Order Items */}
+              <div className="space-y-2 mb-3">
+                {order.order_items?.map(item => (
+                  <div key={item.id} className="flex items-center justify-between text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 bg-[var(--surface-active)] rounded text-xs flex items-center justify-center font-bold">
+                        {item.quantity}
+                      </span>
+                      <span className="text-[var(--text-secondary)]">{item.menu_item?.name || 'Item'}</span>
+                    </div>
+                    {item.notes && (
+                      <span className="text-xs text-amber-400 italic">{item.notes}</span>
+                    )}
+                  </div>
+                ))}
+                {(!order.order_items || order.order_items.length === 0) && (
+                  <p className="text-xs text-[var(--text-muted)]">Loading items...</p>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between pt-3 border-t border-white/10">
+                <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                  <Clock className="w-3 h-3" />
+                  {getTimeAgo(order.created_at)}
+                </div>
+
+                {order.status === 'ready' && (
+                  <button
+                    onClick={() => markAsPickedUp(order.id)}
+                    className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors"
+                  >
+                    <CheckCircle2 className="w-3 h-3" />
+                    Pick Up
+                  </button>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {filteredOrders.length === 0 && (
+        <div className="text-center py-20">
+          <ChefHat className="w-16 h-16 mx-auto mb-4 text-[var(--text-muted)]" />
+          <h3 className="text-lg font-bold text-[var(--text-muted)]">No Active Orders</h3>
+          <p className="text-sm text-[var(--text-muted)]">Kitchen is clear!</p>
+        </div>
+      )}
+    </div>
+  )
 }

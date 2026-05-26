@@ -157,16 +157,8 @@ function StaffSetupContent() {
             loginAsStaff(result.staff, result.restaurant)
             success('Setup Complete!', 'Welcome to the team!')
 
-            // Redirect based on role
-            const roleRoutes: Record<string, string> = {
-                kitchen: '/dashboard/kitchen',
-                waiter: '/dashboard/orders',
-                cashier: '/dashboard/cashier',
-                delivery: '/dashboard/delivery-boy',
-                manager: '/dashboard',
-                owner: '/dashboard',
-            }
-            router.push(roleRoutes[result.staff.role] || '/dashboard')
+            // Redirect to staff portal
+            router.push('/staff-portal')
 
         } catch (err: any) {
             showError('Error', err.message || 'Failed to complete setup')

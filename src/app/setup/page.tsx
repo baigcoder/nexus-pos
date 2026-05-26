@@ -98,8 +98,6 @@ export default function SetupPage() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    owner_id: user?.id,
-                    user_email: user?.email, // Fallback for user lookup
                     name: formData.name,
                     slug: generateSlug(formData.name),
                     address: formData.address,

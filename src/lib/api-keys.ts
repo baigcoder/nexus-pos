@@ -1,10 +1,12 @@
-// API Key management utilities
-import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 import bcrypt from 'bcryptjs'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { timingSafeEqual } from '@/lib/auth/security'
 
-// API Key format: nxp_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxx (40 chars total)
-// Prefix: nxp_live (8 chars) or nxp_test (8 chars)
+const KEY_PREFIX_LIVE = 'nxp_live'
+const KEY_PREFIX_TEST = 'nxp_test'
+const KEY_RANDOM_LENGTH = 32
+const KEY_MIN_LENGTH = 40
 
 interface ApiKeyInfo {
     restaurant_id: string
@@ -20,21 +22,10 @@ interface ApiKeyValidationResult {
     error?: string
 }
 
-// Create admin client for server-side operations
 function getAdminClient() {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-    if (!supabaseUrl || !supabaseServiceKey) {
-        throw new Error('Supabase configuration missing')
-    }
-
-    return createClient(supabaseUrl, supabaseServiceKey)
+    return createAdminClient()
 }
 
-/**
- * Generate a new API key for a restaurant
- */
 export async function generateApiKey(
     restaurantId: string,
     name: string,
@@ -47,18 +38,11 @@ export async function generateApiKey(
     } = {}
 ): Promise<{ key: string; keyId: string }> {
     const supabase = getAdminClient()
-
-    // Generate prefix
-    const prefix = options.isLive ? 'nxp_live' : 'nxp_test'
-
-    // Generate random key part (32 chars)
-    const randomPart = crypto.randomBytes(24).toString('base64url').slice(0, 32)
+    const prefix = options.isLive ? KEY_PREFIX_LIVE : KEY_PREFIX_TEST
+    const randomPart = crypto.randomBytes(24).toString('base64url').slice(0, KEY_RANDOM_LENGTH)
     const fullKey = `${prefix}_${randomPart}`
-
-    // Hash the full key
     const keyHash = await bcrypt.hash(fullKey, 10)
 
-    // Store in database
     const { data, error } = await supabase
         .from('api_keys')
         .insert({
@@ -81,9 +65,6 @@ export async function generateApiKey(
     return { key: fullKey, keyId: data.id }
 }
 
-/**
- * Validate an API key from request headers
- */
 export async function validateApiKey(
     apiKey: string | null,
     origin?: string | null
@@ -92,19 +73,17 @@ export async function validateApiKey(
         return { valid: false, error: 'API key is required' }
     }
 
-    // Quick format validation
-    if (!apiKey.startsWith('nxp_live_') && !apiKey.startsWith('nxp_test_')) {
+    if (!apiKey.startsWith(`${KEY_PREFIX_LIVE}_`) && !apiKey.startsWith(`${KEY_PREFIX_TEST}_`)) {
         return { valid: false, error: 'Invalid API key format' }
     }
 
-    if (apiKey.length < 40) {
+    if (apiKey.length < KEY_MIN_LENGTH) {
         return { valid: false, error: 'Invalid API key format' }
     }
 
     const supabase = getAdminClient()
     const prefix = apiKey.slice(0, 8)
 
-    // Find key by prefix
     const { data: keys, error: fetchError } = await supabase
         .from('api_keys')
         .select('*')
@@ -112,44 +91,48 @@ export async function validateApiKey(
         .eq('is_active', true)
 
     if (fetchError || !keys || keys.length === 0) {
+        await slowCompare(apiKey)
         return { valid: false, error: 'Invalid API key' }
     }
 
-    // Try to match against each key with same prefix (should typically be 1)
     for (const key of keys) {
-        // Check expiration
         if (key.expires_at && new Date(key.expires_at) < new Date()) {
             continue
         }
 
-        // Verify hash
         const isMatch = await bcrypt.compare(apiKey, key.key_hash)
         if (!isMatch) {
             continue
         }
 
-        // Check origin if restricted
-        if (key.allowed_origins && key.allowed_origins.length > 0 && origin) {
-            const originMatch = key.allowed_origins.some((allowed: string) => {
-                // Support wildcard subdomains
-                if (allowed.startsWith('*.')) {
-                    const domain = allowed.slice(2)
-                    return origin.endsWith(domain) || origin === domain.replace(/^\./, '')
-                }
-                return origin === allowed || origin === `https://${allowed}` || origin === `http://${allowed}`
-            })
+        if (key.allowed_origins && key.allowed_origins.length > 0) {
+            if (origin) {
+                const originAllowed = key.allowed_origins.some((allowed: string) => {
+                    if (allowed.startsWith('*.')) {
+                        const domain = allowed.slice(2)
+                        try {
+                            const originHost = new URL(origin).hostname
+                            return originHost === domain || originHost.endsWith(`.${domain}`)
+                        } catch {
+                            return origin === `https://${domain}` || origin === `http://${domain}`
+                        }
+                    }
+                    return origin === allowed || origin === `https://${allowed}` || origin === `http://${allowed}`
+                })
 
-            if (!originMatch) {
-                return { valid: false, error: 'Origin not allowed' }
+                if (!originAllowed) {
+                    return { valid: false, error: 'Origin not allowed' }
+                }
+            } else if (key.allowed_origins.length > 0) {
+                return { valid: false, error: 'Origin required' }
             }
         }
 
-        // Update usage stats
         await supabase
             .from('api_keys')
             .update({
                 last_used_at: new Date().toISOString(),
-                usage_count: key.usage_count + 1
+                usage_count: key.usage_count + 1,
             })
             .eq('id', key.id)
 
@@ -161,38 +144,40 @@ export async function validateApiKey(
         }
     }
 
+    await slowCompare(apiKey)
     return { valid: false, error: 'Invalid API key' }
 }
 
-/**
- * Check if origin is allowed (for CORS)
- */
+async function slowCompare(key: string): Promise<void> {
+    await bcrypt.compare(key, await bcrypt.hash('invalid', 4))
+}
+
 export function getCorsHeaders(
     origin: string | null,
     allowedOrigins: string[]
 ): Record<string, string> {
     const baseHeaders = {
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, X-API-Key, X-Restaurant-ID',
+        'Access-Control-Allow-Headers': 'Content-Type, X-API-Key, X-Request-ID',
         'Access-Control-Max-Age': '86400',
     }
 
-    // If no allowed origins specified, allow all (backward compatible)
     if (!allowedOrigins || allowedOrigins.length === 0) {
-        return {
-            ...baseHeaders,
-            'Access-Control-Allow-Origin': '*',
-        }
+        return baseHeaders
     }
 
-    // Check if origin is in whitelist
     if (origin) {
         const isAllowed = allowedOrigins.some(allowed => {
             if (allowed.startsWith('*.')) {
                 const domain = allowed.slice(2)
-                return origin.includes(domain)
+                try {
+                    const originHost = new URL(origin).hostname
+                    return originHost === domain || originHost.endsWith(`.${domain}`)
+                } catch {
+                    return false
+                }
             }
-            return origin === allowed || origin.includes(allowed)
+            return origin === allowed || origin === `https://${allowed}` || origin === `http://${allowed}`
         })
 
         if (isAllowed) {
@@ -204,33 +189,23 @@ export function getCorsHeaders(
         }
     }
 
-    // Origin not allowed
     return {
         ...baseHeaders,
         'Access-Control-Allow-Origin': 'null',
     }
 }
 
-/**
- * Revoke an API key
- */
 export async function revokeApiKey(keyId: string): Promise<boolean> {
     const supabase = getAdminClient()
-
     const { error } = await supabase
         .from('api_keys')
         .update({ is_active: false })
         .eq('id', keyId)
-
     return !error
 }
 
-/**
- * List API keys for a restaurant (without exposing actual keys)
- */
 export async function listApiKeys(restaurantId: string) {
     const supabase = getAdminClient()
-
     const { data, error } = await supabase
         .from('api_keys')
         .select('id, name, key_prefix, permissions, allowed_origins, rate_limit_per_minute, last_used_at, usage_count, is_active, expires_at, created_at')

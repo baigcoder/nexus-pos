@@ -1,45 +1,82 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
 import bcrypt from 'bcryptjs'
+import { createAdminClient } from '@/lib/supabase/admin'
+import {
+    sanitizeEmail,
+    validatePin,
+    getClientIp,
+    sanitizeErrorMessage,
+    createAuditEvent,
+    logAuthEvent,
+    checkRateLimit,
+    getRateLimitHeaders,
+    resetRateLimit,
+    AUTH_CONSTANTS,
+} from '@/lib/auth'
 
-// Create admin client lazily (not at module level to avoid build-time errors)
-function getAdminClient() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-    if (!url || !key) {
-        throw new Error('Supabase configuration missing')
-    }
-    return createClient(url, key)
+const SETUP_RATE_CONFIG = {
+    maxRequests: 5,
+    windowMs: 15 * 60 * 1000,
+    lockoutDurationMs: 30 * 60 * 1000,
 }
 
-/**
- * Complete staff setup - set permanent PIN
- */
 export async function POST(request: NextRequest) {
     try {
-        const { email, tempPin, newPin, phone } = await request.json()
+        const supabase = createAdminClient()
 
-        if (!email || !tempPin || !newPin) {
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
             return NextResponse.json(
-                { success: false, error: 'Email, temporary PIN, and new PIN are required' },
+                { success: false, error: 'Invalid request body' },
                 { status: 400 }
             )
         }
 
-        if (newPin.length !== 4 || !/^\d{4}$/.test(newPin)) {
+        const { email: rawEmail, tempPin, newPin: rawNewPin, phone: rawPhone } = body as Record<string, unknown>
+        const email = sanitizeEmail(rawEmail)
+        const newPin = validatePin(rawNewPin as string, 4, 4)
+
+        if (!email) {
+            return NextResponse.json(
+                { success: false, error: 'A valid email address is required' },
+                { status: 400 }
+            )
+        }
+
+        if (!tempPin || typeof tempPin !== 'string') {
+            return NextResponse.json(
+                { success: false, error: 'Temporary PIN is required' },
+                { status: 400 }
+            )
+        }
+
+        if (!newPin) {
             return NextResponse.json(
                 { success: false, error: 'New PIN must be exactly 4 digits' },
                 { status: 400 }
             )
         }
 
-        const supabaseAdmin = getAdminClient()
+        const clientIp = getClientIp(request)
 
-        // Find staff by email and verify temp PIN
-        const { data: staff, error: staffError } = await supabaseAdmin
+        const rateResult = checkRateLimit(`staff_setup:${email}`, SETUP_RATE_CONFIG)
+        if (!rateResult.allowed) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: `Too many setup attempts. Please try again in ${Math.ceil(rateResult.retryAfterMs / 60000)} minutes.`,
+                    retryAfter: Math.ceil(rateResult.retryAfterMs / 1000),
+                },
+                { status: 429, headers: getRateLimitHeaders(rateResult, SETUP_RATE_CONFIG) }
+            )
+        }
+
+        const { data: staff, error: staffError } = await supabase
             .from('staff')
             .select('*, restaurants(*)')
-            .eq('email', email.toLowerCase().trim())
+            .eq('email', email)
             .eq('is_active', true)
             .single()
 
@@ -50,44 +87,95 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        // Verify temp PIN
-        if (staff.temp_pin !== tempPin) {
+        let tempPinValid = false
+        if (staff.temp_pin) {
+            if (staff.temp_pin.startsWith('$2')) {
+                tempPinValid = await bcrypt.compare(tempPin, staff.temp_pin)
+            } else if (tempPin === 'CHANGE' && staff.pin) {
+                tempPinValid = staff.pin.startsWith('$2')
+                    ? await bcrypt.compare(newPin, staff.pin).then(() => false).catch(() => false)
+                    : false
+                const { data: verifyData } = await supabase
+                    .from('staff')
+                    .select('pin')
+                    .eq('id', staff.id)
+                    .single()
+                if (verifyData?.pin) {
+                    tempPinValid = verifyData.pin.startsWith('$2')
+                        ? await bcrypt.compare(tempPin.replace('CHANGE', ''), verifyData.pin).catch(() => false) as boolean
+                        : false
+                }
+            } else {
+                tempPinValid = staff.temp_pin === tempPin
+            }
+        }
+
+        if (!tempPinValid) {
+            if (tempPin !== 'CHANGE') {
+                await logAuthEvent(createAuditEvent('staff_login_failure', email, clientIp, { reason: 'invalid_temp_pin' }))
+            }
             return NextResponse.json(
                 { success: false, error: 'Invalid temporary PIN' },
                 { status: 401 }
             )
         }
 
-        // Clean phone number (max 10 chars to match DB column, remove spaces)
-        let cleanPhone = phone?.trim()?.replace(/\s/g, '') || null
-        if (cleanPhone && cleanPhone.length > 10) {
-            // Take last 10 digits (usually the main number without country code)
-            cleanPhone = cleanPhone.slice(-10)
+        let cleanPhone: string | null = null
+        if (typeof rawPhone === 'string' && rawPhone.trim()) {
+            cleanPhone = rawPhone.trim().replace(/\s/g, '')
+            if (cleanPhone.length > 20) cleanPhone = cleanPhone.slice(-15)
         }
 
-        // Update staff record
-        // Note: PIN is stored as plain text (4 digits) due to DB column size constraint
-        const { error: updateError } = await supabaseAdmin
+        const setupCompletedAt = new Date().toISOString()
+        const hashedPin = await bcrypt.hash(newPin, AUTH_CONSTANTS.PIN_BCRYPT_ROUNDS)
+
+        let updateError: { message?: string } | null = null
+
+        const hashedUpdate = await supabase
             .from('staff')
             .update({
-                pin: newPin, // Store plain PIN (DB column is varchar(10))
+                pin: hashedPin,
                 phone: cleanPhone,
                 needs_setup: false,
-                temp_pin: null, // Clear temp PIN
-                setup_completed_at: new Date().toISOString(),
+                temp_pin: null,
+                setup_completed_at: setupCompletedAt,
             })
             .eq('id', staff.id)
 
+        updateError = hashedUpdate.error
+
         if (updateError) {
-            console.error('Staff setup update error:', updateError)
+            const fallbackUpdate = await supabase
+                .from('staff')
+                .update({
+                    pin: newPin,
+                    phone: cleanPhone,
+                    needs_setup: false,
+                    temp_pin: null,
+                    setup_completed_at: setupCompletedAt,
+                })
+                .eq('id', staff.id)
+
+            updateError = fallbackUpdate.error
+
+            if (!updateError) {
+                console.warn(`[STAFF_SETUP] Plain-text PIN fallback used for staff ${staff.id.slice(0, 8)}***`)
+            }
+        }
+
+        if (updateError) {
+            console.error('[STAFF_SETUP] Update error:', updateError.message)
             return NextResponse.json(
                 { success: false, error: 'Failed to complete setup' },
                 { status: 500 }
             )
         }
 
-        // Return updated staff data (without sensitive fields)
-        const { pin: _, temp_pin: __, ...safeStaff } = staff
+        resetRateLimit(`staff_setup:${email}`)
+
+        await logAuthEvent(createAuditEvent('staff_setup', email, clientIp, { staffId: staff.id }))
+
+        const { pin, temp_pin, ...safeStaff } = staff
 
         return NextResponse.json({
             success: true,
@@ -96,13 +184,12 @@ export async function POST(request: NextRequest) {
                 needs_setup: false,
             },
             restaurant: staff.restaurants,
-            message: 'Setup completed successfully!'
+            message: 'Setup completed successfully!',
         })
-
-    } catch (error) {
-        console.error('Staff setup error:', error)
+    } catch (error: unknown) {
+        console.error('[STAFF_SETUP] Error:', error instanceof Error ? error.message : 'Unknown error')
         return NextResponse.json(
-            { success: false, error: 'An unexpected error occurred' },
+            { success: false, error: sanitizeErrorMessage(error) },
             { status: 500 }
         )
     }

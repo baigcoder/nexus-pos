@@ -21,8 +21,9 @@ function OtpVerificationForm() {
     const router = useRouter()
     const searchParams = useSearchParams()
     const email = searchParams.get('email') || ''
+    const restaurantName = searchParams.get('restaurant') || ''
     const { success, error, info } = useToast()
-    const { setPendingOtpEmail, setUser } = useAuthStore()
+    const { setPendingOtpEmail, setUser, setRestaurant } = useAuthStore()
 
     const [isLoading, setIsLoading] = useState(false)
     const [isResending, setIsResending] = useState(false)
@@ -88,6 +89,29 @@ function OtpVerificationForm() {
                 }
                 success('Email Verified!', 'Your account is now active.')
                 setPendingOtpEmail(null)
+
+                if (restaurantName) {
+                    const setupResponse = await fetch('/api/setup/create-restaurant', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            name: restaurantName,
+                            email,
+                        }),
+                    })
+
+                    const setupResult = await setupResponse.json()
+                    if ((setupResponse.ok || setupResponse.status === 409) && setupResult.restaurant) {
+                        setRestaurant(setupResult.restaurant)
+                        router.push('/dashboard')
+                        return
+                    }
+
+                    if (setupResponse.status !== 401) {
+                        throw new Error(setupResult.error || 'Restaurant setup failed')
+                    }
+                }
+
                 router.push('/trial-started')
             }
         } catch (err: unknown) {
@@ -196,7 +220,7 @@ function OtpVerificationForm() {
 
                     {/* Resend Actions */}
                     <div className="text-center mt-6">
-                        <p className="text-neutral-400 text-xs mb-2">Didn't receive the code?</p>
+                        <p className="text-neutral-400 text-xs mb-2">Didn&apos;t receive the code?</p>
                         <button
                             type="button"
                             onClick={handleResend}

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createAdminClient } from '@/lib/supabase/admin'
 import bcrypt from 'bcryptjs'
 
 /**
@@ -43,17 +43,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Initialize Supabase with service role
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-        const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-        if (!supabaseUrl || !supabaseServiceKey) {
-            return NextResponse.json(
-                { error: 'Server configuration error' },
-                { status: 500 }
-            )
-        }
-
-        const supabase = createClient(supabaseUrl, supabaseServiceKey)
+        const supabase = createAdminClient()
 
         // Get all staff with PINs
         const { data: staffList, error: fetchError } = await supabase
@@ -79,7 +69,7 @@ export async function POST(request: NextRequest) {
 
         let migrated = 0
         let skipped = 0
-        let errors: string[] = []
+        const errors: string[] = []
 
         for (const staff of staffList) {
             // Skip if already hashed (bcrypt hashes start with $2)
@@ -109,7 +99,7 @@ export async function POST(request: NextRequest) {
                 } else {
                     migrated++
                 }
-            } catch (hashError) {
+            } catch {
                 errors.push(`Staff ${staff.name} (${staff.id}): Failed to hash PIN`)
             }
         }
@@ -154,17 +144,7 @@ export async function GET(request: NextRequest) {
             )
         }
 
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-        const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-        if (!supabaseUrl || !supabaseServiceKey) {
-            return NextResponse.json(
-                { error: 'Server configuration error' },
-                { status: 500 }
-            )
-        }
-
-        const supabase = createClient(supabaseUrl, supabaseServiceKey)
+        const supabase = createAdminClient()
 
         // Get PIN statistics
         const { data: staffList } = await supabase

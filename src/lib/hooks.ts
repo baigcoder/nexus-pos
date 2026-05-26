@@ -161,7 +161,7 @@ export function useOrders(statusFilter?: string) {
                 .select(`
           *,
           table:tables(id, table_number),
-          items:order_items(*, menu_item:menu_items(id, name, price))
+          items:order_items(*, menu_item:menu_items(id, name))
         `)
                 .eq('restaurant_id', restaurant.id)
                 .order('created_at', { ascending: false })

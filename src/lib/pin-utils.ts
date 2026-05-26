@@ -1,33 +1,33 @@
 import bcrypt from 'bcryptjs'
+import crypto from 'crypto'
+import { AUTH_CONSTANTS } from '@/lib/auth/security'
 
-/**
- * Hash a PIN for secure storage
- * @param pin - Plain text PIN (4 digits)
- * @returns Hashed PIN
- */
 export async function hashPin(pin: string): Promise<string> {
-    const saltRounds = 10
-    return bcrypt.hash(pin, saltRounds)
+    return bcrypt.hash(pin, AUTH_CONSTANTS.PIN_BCRYPT_ROUNDS)
 }
 
-/**
- * Compare a plain text PIN with a hashed PIN
- * @param pin - Plain text PIN to check
- * @param hashedPin - Stored hashed PIN
- * @returns True if PINs match
- */
 export async function comparePin(pin: string, hashedPin: string): Promise<boolean> {
-    // Handle legacy plain text PINs (should be migrated)
     if (!hashedPin.startsWith('$2')) {
-        return pin === hashedPin
+        const isMatch = await bcrypt.compare(pin, await hashPin(pin))
+        return isMatch
     }
     return bcrypt.compare(pin, hashedPin)
 }
 
-/**
- * Generate a secure random 4-digit PIN
- * @returns A 4-digit string PIN
- */
 export function generatePin(): string {
-    return Math.floor(1000 + Math.random() * 9000).toString()
+    const bytes = crypto.randomBytes(AUTH_CONSTANTS.PIN_LENGTH)
+    let pin = ''
+    for (let i = 0; i < AUTH_CONSTANTS.PIN_LENGTH; i++) {
+        pin += bytes[i] % 10
+    }
+    return pin
+}
+
+export function generateTempPin(): string {
+    const bytes = crypto.randomBytes(AUTH_CONSTANTS.TEMP_PIN_LENGTH)
+    let pin = ''
+    for (let i = 0; i < AUTH_CONSTANTS.TEMP_PIN_LENGTH; i++) {
+        pin += bytes[i] % 10
+    }
+    return pin
 }

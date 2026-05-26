@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS staff (
     user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255),
-    pin VARCHAR(10),
+    pin VARCHAR(255), -- Hashed PIN (bcrypt ~60 chars) or plain text during migration
     role VARCHAR(50) NOT NULL CHECK (role IN ('owner', 'manager', 'waiter', 'kitchen', 'cashier')),
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMPTZ DEFAULT NOW(),

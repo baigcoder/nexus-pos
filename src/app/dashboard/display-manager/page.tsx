@@ -1,772 +1,424 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
-import {
-    Tv,
-    Plus,
-    Image as ImageIcon,
-    Video,
-    Tag,
-    Eye,
-    ExternalLink,
-    Settings,
-    Trash2,
-    Edit2,
-    Upload,
-    Monitor,
-    Copy,
-    Key
-} from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { createClient } from '@/lib/supabase/client'
 import { useAuthStore } from '@/stores'
-import { useToast } from '@/components/ui/toast'
-import { Button, Input, Modal, Card, Badge } from '@/components/ui/common'
+import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
+import {
+ Plus, Tv, ChefHat, Wine, Monitor, Users, QrCode,
+ Clock, Eye, RefreshCw, Search, Tv2, Megaphone,
+ ExternalLink, Copy, Trash2, Settings2, Power,
+ ArrowRight, Zap, Layout, EyeOff, CreditCard, ShieldCheck
+} from 'lucide-react'
+import { DisplayCard, DisplayCardSkeleton } from '@/components/display/DisplayCard'
+import { DisplayModal } from '@/components/display/DisplayModal'
+import type { Display, DisplayType } from '@/types/display'
+import { useToast } from '@/components/ui/toast'
+import { canManageDisplays, getDisplayRoleLabels, getDisplaySyncRule } from '@/lib/display-access'
+
+const TYPE_CONFIG: Record<DisplayType, { icon: any; label: string; gradient: string; ring: string }> = {
+ kitchen:       { icon: ChefHat,  label: 'Kitchen',  gradient: 'from-orange-500 to-red-500',    ring: 'ring-orange-500/30' },
+ bar:           { icon: Wine,     label: 'Bar',      gradient: 'from-violet-500 to-purple-500', ring: 'ring-violet-500/30' },
+ counter:       { icon: Monitor,  label: 'Counter',  gradient: 'from-cyan-500 to-blue-500',     ring: 'ring-cyan-500/30' },
+ cashier:       { icon: CreditCard,label: 'Cashier',  gradient: 'from-sky-500 to-indigo-500',    ring: 'ring-sky-500/30' },
+ waiting:       { icon: Users,    label: 'Waiting',  gradient: 'from-emerald-500 to-green-500', ring: 'ring-emerald-500/30' },
+ qr:            { icon: QrCode,   label: 'QR',       gradient: 'from-amber-500 to-orange-500',  ring: 'ring-amber-500/30' },
+ advertisement: { icon: Megaphone,label: 'Ads',      gradient: 'from-pink-500 to-rose-500',     ring: 'ring-pink-500/30' },
+}
+
+const ALL_TYPES: DisplayType[] = ['kitchen', 'bar', 'counter', 'cashier', 'waiting', 'qr', 'advertisement']
 
 export default function DisplayManagerPage() {
-    const { restaurant } = useAuthStore()
-    const { success, error: showError } = useToast()
-
-    const [displayContent, setDisplayContent] = useState<any[]>([])
-    const [screens, setScreens] = useState<any[]>([])
-    const [settings, setSettings] = useState<any>(null)
-    const [showContentModal, setShowContentModal] = useState(false)
-    const [showSettingsModal, setShowSettingsModal] = useState(false)
-    const [showScreenModal, setShowScreenModal] = useState(false)
-    const [editingContent, setEditingContent] = useState<any>(null)
-    const [editingScreen, setEditingScreen] = useState<any>(null)
-    const [isLoading, setIsLoading] = useState(false)
-
-    useEffect(() => {
-        if (restaurant?.id) {
-            loadDisplayContent()
-            loadSettings()
-            loadScreens()
-        }
-    }, [restaurant?.id])
-
-    const loadDisplayContent = async () => {
-        const supabase = createClient()
-        const { data } = await supabase
-            .from('display_content')
-            .select('*')
-            .eq('restaurant_id', restaurant?.id)
-            .order('display_order')
-
-        if (data) setDisplayContent(data)
-    }
-
-    const loadSettings = async () => {
-        const supabase = createClient()
-        let { data } = await supabase
-            .from('display_settings')
-            .select('*')
-            .eq('restaurant_id', restaurant?.id)
-            .single()
-
-        // Create default settings if none exist
-        if (!data) {
-            const { data: newSettings } = await supabase
-                .from('display_settings')
-                .insert({ restaurant_id: restaurant?.id })
-                .select()
-                .single()
-            data = newSettings
-        }
-
-        if (data) setSettings(data)
-    }
-
-    const loadScreens = async () => {
-        const supabase = createClient()
-        const { data } = await supabase
-            .from('display_screens')
-            .select('*')
-            .eq('restaurant_id', restaurant?.id)
-            .order('created_at')
-
-        if (data) setScreens(data)
-    }
-
-    const openDisplayInNewTab = () => {
-        if (!restaurant?.slug) return
-        window.open(`/display/${restaurant.slug}`, '_blank')
-        success('Display Opened', 'Drag this window to your monitor and press F11 for fullscreen')
-    }
-
-    const deleteContent = async (id: string) => {
-        if (!confirm('Delete this content?')) return
-
-        const supabase = createClient()
-        const { error } = await supabase
-            .from('display_content')
-            .delete()
-            .eq('id', id)
-
-        if (error) {
-            showError('Error', error.message)
-        } else {
-            success('Deleted', 'Content removed')
-            loadDisplayContent()
-        }
-    }
-
-    const deleteScreen = async (id: string) => {
-        if (!confirm('Delete this screen?')) return
-
-        const supabase = createClient()
-        const { error } = await supabase
-            .from('display_screens')
-            .delete()
-            .eq('id', id)
-
-        if (error) {
-            showError('Error', error.message)
-        } else {
-            success('Deleted', 'Screen removed')
-            loadScreens()
-        }
-    }
-
-    const copyScreenLogin = (screen: any) => {
-        const loginUrl = `${window.location.origin}/screen-login`
-        const info = `Screen: ${screen.name}\nRestaurant ID: ${restaurant?.slug}\nAccess Code: ${screen.access_code}\nLogin URL: ${loginUrl}`
-        navigator.clipboard.writeText(info)
-        success('Copied!', 'Screen login details copied to clipboard')
-    }
-
-    return (
-        <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="p-8 max-w-[1600px] mx-auto space-y-8"
-        >
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-4xl font-black tracking-tight text-white mb-2">
-                        Display Manager
-                    </h1>
-                    <p className="text-neutral-400">
-                        Manage what customers see on your front screens
-                    </p>
-                </div>
-
-                <div className="flex items-center gap-3">
-                    <Button
-                        onClick={() => setShowSettingsModal(true)}
-                        variant="outline"
-                        icon={Settings}
-                    >
-                        Display Settings
-                    </Button>
-                    <Button
-                        onClick={openDisplayInNewTab}
-                        icon={ExternalLink}
-                    >
-                        Open Display
-                    </Button>
-                </div>
-            </div>
-
-            {/* Screen Management Section */}
-            <div className="bg-gradient-to-br from-blue-500/10 to-cyan-500/5 border border-blue-500/20 rounded-3xl p-6">
-                <div className="flex items-center justify-between mb-6">
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 rounded-xl bg-blue-500/20">
-                            <Monitor className="w-6 h-6 text-blue-400" />
-                        </div>
-                        <div>
-                            <h2 className="text-xl font-bold text-white">Screen Access</h2>
-                            <p className="text-sm text-neutral-400">Manage login credentials for your display screens</p>
-                        </div>
-                    </div>
-                    <Button
-                        onClick={() => { setEditingScreen(null); setShowScreenModal(true); }}
-                        icon={Plus}
-                        className="bg-blue-600 hover:bg-blue-500"
-                    >
-                        Add Screen
-                    </Button>
-                </div>
-
-                {screens.length === 0 ? (
-                    <div className="text-center py-8 border border-dashed border-white/10 rounded-2xl">
-                        <Monitor className="w-12 h-12 text-neutral-600 mx-auto mb-3" />
-                        <p className="text-neutral-500 mb-3">No screens configured yet</p>
-                        <Button
-                            onClick={() => { setEditingScreen(null); setShowScreenModal(true); }}
-                            variant="outline"
-                            size="sm"
-                        >
-                            Add Your First Screen
-                        </Button>
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-3 gap-4">
-                        {screens.map((screen) => (
-                            <Card key={screen.id} className="p-5 group hover:border-blue-500/50 transition-all">
-                                <div className="flex items-start justify-between mb-4">
-                                    <div className="flex items-center gap-3">
-                                        <div className="p-2 rounded-lg bg-blue-500/10">
-                                            <Tv className="w-4 h-4 text-blue-400" />
-                                        </div>
-                                        <div>
-                                            <h3 className="font-bold text-white">{screen.name}</h3>
-                                            <p className="text-xs text-neutral-500">{screen.screen_type}</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button
-                                            onClick={() => copyScreenLogin(screen)}
-                                            className="p-2 hover:bg-white/10 rounded-lg transition-all"
-                                            title="Copy login details"
-                                        >
-                                            <Copy className="w-4 h-4 text-neutral-400" />
-                                        </button>
-                                        <button
-                                            onClick={() => { setEditingScreen(screen); setShowScreenModal(true); }}
-                                            className="p-2 hover:bg-white/10 rounded-lg transition-all"
-                                        >
-                                            <Edit2 className="w-4 h-4 text-neutral-400" />
-                                        </button>
-                                        <button
-                                            onClick={() => deleteScreen(screen.id)}
-                                            className="p-2 hover:bg-red-500/20 rounded-lg transition-all"
-                                        >
-                                            <Trash2 className="w-4 h-4 text-red-500" />
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div className="bg-black/30 rounded-xl p-3 space-y-2">
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-[10px] font-bold text-neutral-600 uppercase tracking-wider">Access Code</span>
-                                        <div className="flex items-center gap-2">
-                                            <Key className="w-3 h-3 text-blue-400" />
-                                            <span className="text-sm font-mono font-bold text-blue-400">{screen.access_code}</span>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-[10px] font-bold text-neutral-600 uppercase tracking-wider">Status</span>
-                                        <span className={`text-xs font-bold ${screen.is_active ? 'text-emerald-500' : 'text-red-500'}`}>
-                                            {screen.is_active ? '● Active' : '○ Inactive'}
-                                        </span>
-                                    </div>
-                                </div>
-                            </Card>
-                        ))}
-                    </div>
-                )}
-
-                <div className="mt-4 p-4 bg-white/5 rounded-xl">
-                    <p className="text-xs text-neutral-400">
-                        <strong className="text-white">How to use:</strong> Go to <code className="bg-black/30 px-2 py-0.5 rounded">/screen-login</code>, enter your restaurant ID (<code className="bg-black/30 px-2 py-0.5 rounded">{restaurant?.slug}</code>) and the access code above.
-                    </p>
-                </div>
-            </div>
-
-            {/* Quick Actions */}
-            <div className="grid grid-cols-4 gap-4">
-                <Card
-                    onClick={() => { setEditingContent(null); setShowContentModal(true); }}
-                    className="p-6 cursor-pointer hover:border-orange-500 transition-all group"
-                >
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 rounded-xl bg-orange-500/10 group-hover:bg-orange-500/20 transition-all">
-                            <ImageIcon className="w-6 h-6 text-orange-500" />
-                        </div>
-                        <div>
-                            <p className="font-bold text-white">Add Banner</p>
-                            <p className="text-xs text-neutral-500">Image slide</p>
-                        </div>
-                    </div>
-                </Card>
-
-                <Card
-                    onClick={() => { setEditingContent({ content_type: 'video' }); setShowContentModal(true); }}
-                    className="p-6 cursor-pointer hover:border-blue-500 transition-all group"
-                >
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 rounded-xl bg-blue-500/10 group-hover:bg-blue-500/20 transition-all">
-                            <Video className="w-6 h-6 text-blue-500" />
-                        </div>
-                        <div>
-                            <p className="font-bold text-white">Add Video</p>
-                            <p className="text-xs text-neutral-500">Video slide</p>
-                        </div>
-                    </div>
-                </Card>
-
-                <Card
-                    onClick={() => { setEditingContent({ content_type: 'promo' }); setShowContentModal(true); }}
-                    className="p-6 cursor-pointer hover:border-emerald-500 transition-all group"
-                >
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 rounded-xl bg-emerald-500/10 group-hover:bg-emerald-500/20 transition-all">
-                            <Tag className="w-6 h-6 text-emerald-500" />
-                        </div>
-                        <div>
-                            <p className="font-bold text-white">Add Promo</p>
-                            <p className="text-xs text-neutral-500">Discount banner</p>
-                        </div>
-                    </div>
-                </Card>
-
-                <Card className="p-6 bg-neutral-900/50">
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 rounded-xl bg-white/5">
-                            <Tv className="w-6 h-6 text-white" />
-                        </div>
-                        <div>
-                            <p className="font-bold text-white">{displayContent.length}</p>
-                            <p className="text-xs text-neutral-500">Active Content</p>
-                        </div>
-                    </div>
-                </Card>
-            </div>
-
-            {/* Content List */}
-            <div>
-                <h2 className="text-2xl font-bold text-white mb-4">Display Content</h2>
-                <div className="grid grid-cols-3 gap-4">
-                    {displayContent.map((content) => (
-                        <Card key={content.id} className="p-6 group hover:border-orange-500/50 transition-all">
-                            <div className="flex items-start justify-between mb-4">
-                                <Badge className={cn(
-                                    content.content_type === 'banner' && 'bg-orange-500/20 text-orange-500',
-                                    content.content_type === 'video' && 'bg-blue-500/20 text-blue-500',
-                                    content.content_type === 'promo' && 'bg-emerald-500/20 text-emerald-500'
-                                )}>
-                                    {content.content_type}
-                                </Badge>
-                                <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button
-                                        onClick={() => { setEditingContent(content); setShowContentModal(true); }}
-                                        className="p-2 hover:bg-white/10 rounded-lg transition-all"
-                                    >
-                                        <Edit2 className="w-4 h-4 text-neutral-400" />
-                                    </button>
-                                    <button
-                                        onClick={() => deleteContent(content.id)}
-                                        className="p-2 hover:bg-red-500/20 rounded-lg transition-all"
-                                    >
-                                        <Trash2 className="w-4 h-4 text-red-500" />
-                                    </button>
-                                </div>
-                            </div>
-
-                            {content.media_url && (
-                                <div className="relative h-32 bg-neutral-900 rounded-xl mb-4 overflow-hidden">
-                                    {content.content_type === 'video' ? (
-                                        <video src={content.media_url} className="w-full h-full object-cover" />
-                                    ) : (
-                                        <img src={content.media_url} alt={content.title} className="w-full h-full object-cover" />
-                                    )}
-                                </div>
-                            )}
-
-                            <h3 className="font-bold text-white mb-1">{content.title}</h3>
-                            {content.description && (
-                                <p className="text-sm text-neutral-500 mb-3 line-clamp-2">{content.description}</p>
-                            )}
-                            <div className="flex items-center justify-between text-xs text-neutral-600">
-                                <span>{content.duration_seconds}s duration</span>
-                                <span className={content.is_active ? 'text-emerald-500' : 'text-red-500'}>
-                                    {content.is_active ? '● Active' : '○ Inactive'}
-                                </span>
-                            </div>
-                        </Card>
-                    ))}
-                </div>
-            </div>
-
-            {/* Content Modal */}
-            <Modal
-                isOpen={showContentModal}
-                onClose={() => { setShowContentModal(false); setEditingContent(null); }}
-                title={editingContent?.id ? 'Edit Content' : 'Add Content'}
-                size="lg"
-            >
-                <ContentForm
-                    content={editingContent}
-                    restaurantId={restaurant?.id}
-                    onSuccess={() => {
-                        setShowContentModal(false)
-                        setEditingContent(null)
-                        loadDisplayContent()
-                    }}
-                    onCancel={() => {
-                        setShowContentModal(false)
-                        setEditingContent(null)
-                    }}
-                />
-            </Modal>
-
-            {/* Settings Modal */}
-            <Modal
-                isOpen={showSettingsModal}
-                onClose={() => setShowSettingsModal(false)}
-                title="Display Settings"
-                size="md"
-            >
-                <SettingsForm
-                    settings={settings}
-                    restaurantId={restaurant?.id}
-                    onSuccess={() => {
-                        setShowSettingsModal(false)
-                        loadSettings()
-                    }}
-                    onCancel={() => setShowSettingsModal(false)}
-                />
-            </Modal>
-
-            {/* Screen Modal */}
-            <Modal
-                isOpen={showScreenModal}
-                onClose={() => { setShowScreenModal(false); setEditingScreen(null); }}
-                title={editingScreen?.id ? 'Edit Screen' : 'Add Screen'}
-                size="md"
-            >
-                <ScreenForm
-                    screen={editingScreen}
-                    restaurantId={restaurant?.id}
-                    onSuccess={() => {
-                        setShowScreenModal(false)
-                        setEditingScreen(null)
-                        loadScreens()
-                    }}
-                    onCancel={() => {
-                        setShowScreenModal(false)
-                        setEditingScreen(null)
-                    }}
-                />
-            </Modal>
-        </motion.div>
-    )
-}
-
-// Content Form Component
-function ContentForm({ content, restaurantId, onSuccess, onCancel }: any) {
-    const { success, error: showError } = useToast()
-    const [isLoading, setIsLoading] = useState(false)
-    const [formData, setFormData] = useState({
-        content_type: content?.content_type || 'banner',
-        title: content?.title || '',
-        description: content?.description || '',
-        media_url: content?.media_url || '',
-        duration_seconds: content?.duration_seconds || 10,
-        display_order: content?.display_order || 0,
-        is_active: content?.is_active !== false,
-    })
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault()
-        setIsLoading(true)
-
-        try {
-            const supabase = createClient()
-
-            if (content?.id) {
-                // Update
-                const { error } = await supabase
-                    .from('display_content')
-                    .update(formData)
-                    .eq('id', content.id)
-
-                if (error) throw error
-                success('Updated', 'Content updated successfully')
-            } else {
-                // Create
-                const { error } = await supabase
-                    .from('display_content')
-                    .insert({ ...formData, restaurant_id: restaurantId })
-
-                if (error) throw error
-                success('Added', 'Content added to display')
-            }
-
-            onSuccess()
-        } catch (err: any) {
-            showError('Error', err.message)
-        } finally {
-            setIsLoading(false)
-        }
-    }
-
-    return (
-        <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="grid grid-cols-2 gap-4">
-                <Input
-                    label="Title"
-                    value={formData.title}
-                    onChange={(e: any) => setFormData({ ...formData, title: e.target.value })}
-                    required
-                />
-                <Input
-                    label="Duration (seconds)"
-                    type="number"
-                    value={formData.duration_seconds}
-                    onChange={(e: any) => setFormData({ ...formData, duration_seconds: parseInt(e.target.value) })}
-                    required
-                />
-            </div>
-
-            <Input
-                label="Description"
-                value={formData.description}
-                onChange={(e: any) => setFormData({ ...formData, description: e.target.value })}
-            />
-
-            <Input
-                label="Media URL (Image or Video)"
-                value={formData.media_url}
-                onChange={(e: any) => setFormData({ ...formData, media_url: e.target.value })}
-                placeholder="https://example.com/image.jpg"
-            />
-
-            <div className="flex items-center gap-4">
-                <label className="flex items-center gap-2">
-                    <input
-                        type="checkbox"
-                        checked={formData.is_active}
-                        onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                        className="w-4 h-4"
-                    />
-                    <span className="text-sm text-white">Active</span>
-                </label>
-            </div>
-
-            <div className="flex gap-3">
-                <Button type="button" onClick={onCancel} variant="outline" className="flex-1">
-                    Cancel
-                </Button>
-                <Button type="submit" isLoading={isLoading} className="flex-1">
-                    {content?.id ? 'Update' : 'Add'} Content
-                </Button>
-            </div>
-        </form>
-    )
-}
-
-// Settings Form Component
-function SettingsForm({ settings, restaurantId, onSuccess, onCancel }: any) {
-    const { success, error: showError } = useToast()
-    const [isLoading, setIsLoading] = useState(false)
-    const [formData, setFormData] = useState({
-        theme: settings?.theme || 'dark',
-        primary_color: settings?.primary_color || '#ea580c',
-        show_prices: settings?.show_prices !== false,
-        show_order_ticker: settings?.show_order_ticker !== false,
-        auto_rotate: settings?.auto_rotate !== false,
-        rotate_interval: settings?.rotate_interval || 8,
-    })
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault()
-        setIsLoading(true)
-
-        try {
-            const supabase = createClient()
-
-            const { error } = await supabase
-                .from('display_settings')
-                .upsert({
-                    ...formData,
-                    restaurant_id: restaurantId,
-                    id: settings?.id
-                })
-
-            if (error) throw error
-            success('Saved', 'Display settings updated')
-            onSuccess()
-        } catch (err: any) {
-            showError('Error', err.message)
-        } finally {
-            setIsLoading(false)
-        }
-    }
-
-    return (
-        <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="space-y-4">
-                <label className="flex items-center gap-2">
-                    <input
-                        type="checkbox"
-                        checked={formData.show_prices}
-                        onChange={(e) => setFormData({ ...formData, show_prices: e.target.checked })}
-                        className="w-4 h-4"
-                    />
-                    <span className="text-sm text-white">Show Prices</span>
-                </label>
-
-                <label className="flex items-center gap-2">
-                    <input
-                        type="checkbox"
-                        checked={formData.show_order_ticker}
-                        onChange={(e) => setFormData({ ...formData, show_order_ticker: e.target.checked })}
-                        className="w-4 h-4"
-                    />
-                    <span className="text-sm text-white">Show Order Ticker</span>
-                </label>
-
-                <label className="flex items-center gap-2">
-                    <input
-                        type="checkbox"
-                        checked={formData.auto_rotate}
-                        onChange={(e) => setFormData({ ...formData, auto_rotate: e.target.checked })}
-                        className="w-4 h-4"
-                    />
-                    <span className="text-sm text-white">Auto-rotate Banners</span>
-                </label>
-            </div>
-
-            {formData.auto_rotate && (
-                <Input
-                    label="Banner Rotation Interval (seconds)"
-                    type="number"
-                    value={formData.rotate_interval}
-                    onChange={(e: any) => setFormData({ ...formData, rotate_interval: parseInt(e.target.value) })}
-                />
-            )}
-
-            <div className="flex gap-3">
-                <Button type="button" onClick={onCancel} variant="outline" className="flex-1">
-                    Cancel
-                </Button>
-                <Button type="submit" isLoading={isLoading} className="flex-1">
-                    Save Settings
-                </Button>
-            </div>
-        </form>
-    )
-}
-
-// Screen Form Component (for owner to add/edit screen credentials)
-function ScreenForm({ screen, restaurantId, onSuccess, onCancel }: any) {
-    const { success, error: showError } = useToast()
-    const [isLoading, setIsLoading] = useState(false)
-    const [formData, setFormData] = useState({
-        name: screen?.name || '',
-        access_code: screen?.access_code || generateAccessCode(),
-        screen_type: screen?.screen_type || 'customer',
-        is_active: screen?.is_active !== false,
-    })
-
-    function generateAccessCode() {
-        return Math.floor(1000 + Math.random() * 9000).toString()
-    }
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault()
-        setIsLoading(true)
-
-        try {
-            const supabase = createClient()
-
-            if (screen?.id) {
-                // Update
-                const { error } = await supabase
-                    .from('display_screens')
-                    .update(formData)
-                    .eq('id', screen.id)
-
-                if (error) throw error
-                success('Updated', 'Screen updated successfully')
-            } else {
-                // Create
-                const { error } = await supabase
-                    .from('display_screens')
-                    .insert({ ...formData, restaurant_id: restaurantId })
-
-                if (error) throw error
-                success('Added', 'Screen created successfully')
-            }
-
-            onSuccess()
-        } catch (err: any) {
-            showError('Error', err.message)
-        } finally {
-            setIsLoading(false)
-        }
-    }
-
-    return (
-        <form onSubmit={handleSubmit} className="space-y-6">
-            <Input
-                label="Screen Name"
-                value={formData.name}
-                onChange={(e: any) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="e.g. Front Counter Display"
-                required
-            />
-
-            <div className="space-y-2">
-                <label className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest">
-                    Screen Type
-                </label>
-                <div className="grid grid-cols-3 gap-3">
-                    {(['customer', 'kitchen', 'order_status'] as const).map((type) => (
-                        <button
-                            key={type}
-                            type="button"
-                            onClick={() => setFormData({ ...formData, screen_type: type })}
-                            className={cn(
-                                'h-12 rounded-xl text-xs font-bold uppercase tracking-wide transition-all border',
-                                formData.screen_type === type
-                                    ? 'bg-blue-600 border-blue-500 text-white'
-                                    : 'bg-neutral-900 border-neutral-800 text-neutral-500 hover:border-neutral-700'
-                            )}
-                        >
-                            {type.replace('_', ' ')}
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            <div className="space-y-2">
-                <label className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest">
-                    Access Code
-                </label>
-                <div className="flex items-center gap-3">
-                    <input
-                        type="text"
-                        value={formData.access_code}
-                        onChange={(e) => setFormData({ ...formData, access_code: e.target.value })}
-                        className="flex-1 h-14 bg-neutral-900 border border-neutral-800 rounded-xl px-4 text-2xl font-mono font-bold text-blue-400 tracking-widest text-center"
-                        maxLength={6}
-                        required
-                    />
-                    <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setFormData({ ...formData, access_code: generateAccessCode() })}
-                    >
-                        Generate
-                    </Button>
-                </div>
-                <p className="text-xs text-neutral-500">This code is used to login to the display screen</p>
-            </div>
-
-            <label className="flex items-center gap-2">
-                <input
-                    type="checkbox"
-                    checked={formData.is_active}
-                    onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                    className="w-4 h-4"
-                />
-                <span className="text-sm text-white">Active</span>
-            </label>
-
-            <div className="flex gap-3">
-                <Button type="button" onClick={onCancel} variant="outline" className="flex-1">
-                    Cancel
-                </Button>
-                <Button type="submit" isLoading={isLoading} className="flex-1">
-                    {screen?.id ? 'Update' : 'Add'} Screen
-                </Button>
-            </div>
-        </form>
-    )
+ const router = useRouter()
+ const { restaurant, userRole, staff } = useAuthStore()
+ const { success, error: toastError } = useToast()
+ const supabase = createClient()
+
+ const [displays, setDisplays] = useState<Display[]>([])
+ const [isLoading, setIsLoading] = useState(true)
+ const [isRefreshing, setIsRefreshing] = useState(false)
+ const [searchQuery, setSearchQuery] = useState('')
+ const [filterType, setFilterType] = useState<DisplayType | 'all'>('all')
+ const [isModalOpen, setIsModalOpen] = useState(false)
+ const [editingDisplay, setEditingDisplay] = useState<Display | null>(null)
+
+ const effectiveRole = userRole || staff?.role
+
+ useEffect(() => {
+  if (effectiveRole && !canManageDisplays(effectiveRole)) {
+   router.push('/dashboard')
+  }
+ }, [effectiveRole, router])
+
+ const loadDisplays = useCallback(async () => {
+  if (!restaurant?.id) return
+  setIsRefreshing(true)
+  try {
+   const { data } = await supabase
+    .from('displays')
+    .select('*')
+    .eq('restaurant_id', restaurant.id)
+    .order('created_at', { ascending: false })
+
+   if (data) {
+    setDisplays(data.map((d: any) => ({
+     ...d,
+     settings: typeof d.settings === 'string' ? JSON.parse(d.settings) : d.settings
+    })))
+   }
+  } catch (err) {
+   console.error('Failed to load displays:', err)
+  } finally {
+   setIsLoading(false)
+   setIsRefreshing(false)
+  }
+ }, [restaurant?.id, supabase])
+
+ useEffect(() => { loadDisplays() }, [loadDisplays])
+
+ // Real-time sync
+ useEffect(() => {
+  if (!restaurant?.id) return
+  const channel = supabase
+   .channel('displays_changes')
+   .on('postgres_changes', {
+    event: '*', schema: 'public', table: 'displays',
+    filter: `restaurant_id=eq.${restaurant.id}`
+   }, () => loadDisplays())
+   .subscribe()
+  return () => { supabase.removeChannel(channel) }
+ }, [restaurant?.id, loadDisplays, supabase])
+
+ const handleSaveDisplay = async (displayData: Partial<Display>) => {
+  const syncRule = displayData.type ? getDisplaySyncRule(displayData.type) : null
+  const payload = {
+   ...displayData,
+   settings: syncRule
+    ? JSON.stringify({
+      ...(typeof displayData.settings === 'string' ? JSON.parse(displayData.settings) : displayData.settings),
+      allowed_roles: syncRule.roles,
+      sync_target: syncRule.label,
+     })
+    : typeof displayData.settings === 'string'
+      ? displayData.settings
+      : JSON.stringify(displayData.settings),
+  }
+  if (displayData.id) {
+   const { error } = await supabase.from('displays').update(payload).eq('id', displayData.id)
+   if (error) throw error
+   success('Display Updated', `${displayData.name} has been updated.`)
+  } else {
+   const { error } = await supabase.from('displays').insert(payload)
+   if (error) throw error
+   success('Display Created', `${displayData.name} is ready to use.`)
+  }
+  await loadDisplays()
+ }
+
+ const handleToggleActive = async (display: Display) => {
+  try {
+   await supabase.from('displays').update({ is_active: !display.is_active }).eq('id', display.id)
+   success(display.is_active ? 'Display Paused' : 'Display Activated', `${display.name} ${display.is_active ? 'paused' : 'activated'}.`)
+   await loadDisplays()
+  } catch { toastError('Error', 'Failed to toggle display') }
+ }
+
+ const handleDuplicate = async (display: Display) => {
+  let slug = display.slug + '-copy'
+  let c = 1
+  while (displays.some(d => d.slug === slug)) { slug = `${display.slug}-copy-${c}`; c++ }
+  await handleSaveDisplay({
+   name: `${display.name} (Copy)`, slug, type: display.type,
+   template: display.template, settings: display.settings, restaurant_id: display.restaurant_id,
+  })
+ }
+
+ const handleDelete = async (display: Display) => {
+  if (!confirm(`Delete "${display.name}"? This cannot be undone.`)) return
+  try {
+   await supabase.from('displays').delete().eq('id', display.id)
+   success('Deleted', `${display.name} has been removed.`)
+   await loadDisplays()
+  } catch { toastError('Error', 'Failed to delete display') }
+ }
+
+ const filteredDisplays = displays.filter(d => {
+  const matchesSearch = d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+   d.slug.toLowerCase().includes(searchQuery.toLowerCase())
+  return matchesSearch && (filterType === 'all' || d.type === filterType)
+ })
+
+ const activeCount = displays.filter(d => d.is_active).length
+ const totalCount = displays.length
+ const typeCounts = ALL_TYPES.reduce((acc, t) => ({ ...acc, [t]: displays.filter(d => d.type === t).length }), {} as Record<string, number>)
+
+ return (
+  <div className="p-4 lg:p-6 max-w-[1400px] mx-auto space-y-6 min-w-0">
+   {/* Header */}
+   <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="flex items-center gap-4">
+     <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-brand to-red-500 flex items-center justify-center shadow-glow shrink-0">
+      <Tv className="w-6 h-6 text-white" />
+     </div>
+     <div>
+      <h1 className="text-2xl font-bold text-[var(--text-primary)] tracking-tight">Display Manager</h1>
+      <p className="text-xs text-[var(--text-muted)] mt-0.5">
+       {totalCount} display{totalCount !== 1 ? 's' : ''} · {activeCount} active
+      </p>
+     </div>
+    </div>
+    <button
+     onClick={() => { setEditingDisplay(null); setIsModalOpen(true) }}
+     className="h-10 px-5 bg-gradient-to-r from-brand to-orange-600 hover:from-brand-hover hover:to-orange-700 text-white rounded-xl flex items-center gap-2 font-semibold text-sm shadow-glow hover:shadow-glow-lg transition-all shrink-0"
+    >
+     <Plus className="w-4 h-4" /> New Display
+    </button>
+   </motion.div>
+
+   {/* Stats Row */}
+   <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
+    className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    {[
+     { label: 'Total', value: totalCount, icon: Layout, color: 'text-brand', bg: 'bg-brand/10', ring: 'ring-brand/20' },
+     { label: 'Active', value: activeCount, icon: Eye, color: 'text-emerald-400', bg: 'bg-emerald-500/10', ring: 'ring-emerald-500/20' },
+     { label: 'Inactive', value: totalCount - activeCount, icon: EyeOff, color: 'text-zinc-400', bg: 'bg-zinc-500/10', ring: 'ring-zinc-500/20' },
+     { label: 'Types Used', value: `${new Set(displays.map(d => d.type)).size}/${ALL_TYPES.length}`, icon: Zap, color: 'text-violet-400', bg: 'bg-violet-500/10', ring: 'ring-violet-500/20' },
+  ].map((s, i) => (
+     <div key={s.label} className={cn("flex items-center gap-3 p-4 rounded-2xl ring-1", s.bg, s.ring)}>
+      <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", s.bg)}>
+       <s.icon className={cn("w-5 h-5", s.color)} />
+      </div>
+      <div>
+       <p className={cn("text-xl font-bold", s.color)}>{s.value}</p>
+       <p className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">{s.label}</p>
+      </div>
+     </div>
+    ))}
+   </motion.div>
+
+   {/* Role Sync Matrix */}
+   <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }}
+    className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+    {(['kitchen', 'counter', 'cashier', 'advertisement'] as DisplayType[]).map(type => {
+     const cfg = TYPE_CONFIG[type]
+     const Icon = cfg.icon
+     const syncRule = getDisplaySyncRule(type)
+     const count = typeCounts[type] || 0
+     return (
+      <div key={type} className="rounded-2xl border border-[var(--border)] bg-[var(--surface-raised)] p-4">
+       <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+         <div className={cn("w-10 h-10 rounded-xl bg-gradient-to-br flex items-center justify-center", cfg.gradient)}>
+          <Icon className="w-5 h-5 text-white" />
+         </div>
+         <div>
+          <p className="text-sm font-bold text-[var(--text-primary)]">{syncRule.label}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{count} configured</p>
+         </div>
+        </div>
+        <ShieldCheck className="w-4 h-4 text-emerald-400" />
+       </div>
+       <p className="mt-3 text-xs leading-relaxed text-[var(--text-muted)]">{syncRule.description}</p>
+       <div className="mt-3 flex flex-wrap gap-1.5">
+        {getDisplayRoleLabels(type).map(role => (
+         <span key={role} className="rounded-md bg-[var(--surface-active)] px-2 py-1 text-[10px] font-bold text-[var(--text-secondary)]">
+          {role}
+         </span>
+        ))}
+       </div>
+      </div>
+     )
+    })}
+   </motion.div>
+
+   {/* Ad Content Banner */}
+   <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
+    <a href="/dashboard/display-manager/ad-content"
+     className="group flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-pink-500/10 via-purple-500/8 to-violet-500/5 ring-1 ring-pink-500/15 hover:ring-pink-500/30 transition-all">
+     <div className="flex items-center gap-4">
+      <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center shadow-sm">
+       <Megaphone className="w-5 h-5 text-white" />
+      </div>
+      <div>
+       <p className="font-bold text-sm text-[var(--text-primary)]">Advertisement Slideshow</p>
+       <p className="text-xs text-[var(--text-muted)]">Manage promotional content, banners & media</p>
+      </div>
+     </div>
+     <div className="flex items-center gap-2 text-pink-400 text-sm font-semibold group-hover:gap-3 transition-all">
+      Manage <ArrowRight className="w-4 h-4" />
+     </div>
+    </a>
+   </motion.div>
+
+   {/* Type Filter Tabs + Search */}
+   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.15 }} className="space-y-4">
+    {/* Type tabs */}
+    <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+     <button
+      onClick={() => setFilterType('all')}
+      className={cn(
+       "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all shrink-0 ring-1",
+       filterType === 'all'
+        ? "bg-brand/10 text-brand ring-brand/30"
+        : "text-[var(--text-muted)] ring-transparent hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+      )}
+     >
+      <Layout className="w-3.5 h-3.5" /> All ({totalCount})
+     </button>
+     {ALL_TYPES.map(type => {
+      const cfg = TYPE_CONFIG[type]
+      const count = typeCounts[type] || 0
+      const Icon = cfg.icon
+      return (
+       <button
+        key={type}
+        onClick={() => setFilterType(filterType === type ? 'all' : type)}
+        className={cn(
+         "flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all shrink-0 ring-1",
+         filterType === type
+          ? cn("bg-gradient-to-r text-white", cfg.gradient, cfg.ring)
+          : "text-[var(--text-muted)] ring-transparent hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]",
+         count === 0 && filterType !== type && "opacity-40"
+        )}
+       >
+        <Icon className="w-3.5 h-3.5" /> {cfg.label}
+        {count > 0 && <span className={cn("ml-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold",
+         filterType === type ? "bg-white/20" : "bg-[var(--surface-active)]"
+        )}>{count}</span>}
+       </button>
+      )
+     })}
+    </div>
+
+    {/* Search + refresh */}
+    <div className="flex gap-3">
+     <div className="relative flex-1">
+      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
+      <input
+       type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+       placeholder="Search by name or slug..."
+       className="w-full pl-10 pr-4 h-10 rounded-xl bg-[var(--surface-raised)] border border-[var(--border)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none focus:border-brand/50 focus:ring-1 focus:ring-brand/20 transition-all"
+      />
+     </div>
+     <button
+      onClick={loadDisplays}
+      disabled={isRefreshing}
+      className="h-10 w-10 rounded-xl bg-[var(--surface-raised)] border border-[var(--border)] flex items-center justify-center hover:bg-[var(--surface-hover)] transition-colors disabled:opacity-50 shrink-0"
+      aria-label="Refresh"
+     >
+      <RefreshCw className={cn("w-4 h-4 text-[var(--text-muted)]", isRefreshing && "animate-spin")} />
+     </button>
+    </div>
+   </motion.div>
+
+   {/* Display Grid */}
+   {isLoading ? (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+     {[...Array(6)].map((_, i) => <DisplayCardSkeleton key={i} />)}
+    </div>
+   ) : filteredDisplays.length === 0 ? (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+     className="flex flex-col items-center justify-center py-20 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-raised)] relative overflow-hidden">
+     <div className="absolute inset-0 bg-gradient-to-br from-brand/[0.02] via-transparent to-transparent pointer-events-none" />
+     <div className="relative z-10 text-center">
+      <div className="w-16 h-16 rounded-2xl bg-brand/10 flex items-center justify-center mx-auto mb-4">
+       <Tv className="w-8 h-8 text-brand/50" />
+      </div>
+      <h2 className="text-lg font-bold text-[var(--text-primary)] mb-1">
+       {searchQuery || filterType !== 'all' ? 'No displays found' : 'No displays yet'}
+      </h2>
+      <p className="text-sm text-[var(--text-muted)] max-w-xs mx-auto">
+       {searchQuery || filterType !== 'all' ? 'Try adjusting your search or filter' : 'Create your first digital display to get started'}
+      </p>
+      {!searchQuery && filterType === 'all' && (
+       <button
+        onClick={() => { setEditingDisplay(null); setIsModalOpen(true) }}
+        className="mt-5 h-10 px-5 bg-gradient-to-r from-brand to-orange-600 text-white rounded-xl flex items-center gap-2 font-semibold text-sm shadow-glow mx-auto"
+       >
+        <Plus className="w-4 h-4" /> Create Display
+       </button>
+      )}
+     </div>
+    </motion.div>
+   ) : (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+     <AnimatePresence mode="popLayout">
+      {filteredDisplays.map((display) => (
+       <DisplayCard
+        key={display.id}
+        display={display}
+        onEdit={(d) => { setEditingDisplay(d); setIsModalOpen(true) }}
+        onDuplicate={handleDuplicate}
+        onDelete={handleDelete}
+       />
+      ))}
+     </AnimatePresence>
+    </div>
+   )}
+
+   {/* Quick Access Links */}
+   {totalCount > 0 && (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
+     className="p-5 bg-[var(--surface-raised)] rounded-2xl border border-[var(--border)]">
+     <h3 className="text-sm font-bold text-[var(--text-primary)] mb-3 flex items-center gap-2">
+      <ExternalLink className="w-4 h-4 text-brand" /> Quick Access URLs
+     </h3>
+     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+      {displays.map(d => {
+       const cfg = TYPE_CONFIG[d.type]
+       const Icon = cfg.icon
+       return (
+        <a key={d.id} href={`/display/${d.slug}`} target="_blank" rel="noopener noreferrer"
+         className="group flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-[var(--surface-hover)] transition-all">
+         <div className={cn("w-7 h-7 rounded-lg bg-gradient-to-br flex items-center justify-center shrink-0", cfg.gradient)}>
+          <Icon className="w-3.5 h-3.5 text-white" />
+         </div>
+         <div className="flex-1 min-w-0">
+          <p className="text-xs font-semibold text-[var(--text-primary)] truncate group-hover:text-brand transition-colors">{d.name}</p>
+          <p className="text-[10px] text-[var(--text-muted)] font-mono truncate">/display/{d.slug}</p>
+         </div>
+         <div className={cn("w-2 h-2 rounded-full shrink-0", d.is_active ? "bg-emerald-400" : "bg-zinc-600")} />
+        </a>
+       )
+      })}
+     </div>
+    </motion.div>
+   )}
+
+   {/* How-to Guide */}
+   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.25 }}
+    className="p-5 rounded-2xl bg-gradient-to-r from-brand/[0.06] via-orange-500/[0.03] to-transparent ring-1 ring-brand/10">
+    <h3 className="text-sm font-bold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+     <Tv2 className="w-4 h-4 text-brand" /> Getting Started
+    </h3>
+    <div className="grid md:grid-cols-3 gap-4">
+     {[
+      { step: '1', title: 'Create Display', desc: 'Configure type, template, refresh interval, and theme settings.' },
+      { step: '2', title: 'Open on Device', desc: 'Use the URL on tablets, TVs, or any browser. Displays auto-refresh.' },
+      { step: '3', title: 'Live Updates', desc: 'Orders appear in real-time. Staff can update status directly.' },
+     ].map(s => (
+      <div key={s.step} className="flex gap-3">
+       <div className="w-7 h-7 rounded-lg bg-brand/10 flex items-center justify-center shrink-0 text-brand text-xs font-bold">{s.step}</div>
+       <div>
+        <p className="text-xs font-bold text-[var(--text-primary)] mb-0.5">{s.title}</p>
+        <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">{s.desc}</p>
+       </div>
+      </div>
+     ))}
+    </div>
+   </motion.div>
+
+   {/* Modal */}
+   <DisplayModal
+    isOpen={isModalOpen}
+    onClose={() => { setIsModalOpen(false); setEditingDisplay(null) }}
+    onSave={handleSaveDisplay}
+    display={editingDisplay}
+    restaurantId={restaurant?.id || ''}
+    existingSlugs={displays.map(d => d.slug)}
+   />
+  </div>
+ )
 }

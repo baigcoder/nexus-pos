@@ -1,138 +1,130 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
 import bcrypt from 'bcryptjs'
+import { createAdminClient } from '@/lib/supabase/admin'
+import {
+    validatePin,
+    validateSlug,
+    getClientIp,
+    sanitizeErrorMessage,
+    createAuditEvent,
+    logAuthEvent,
+    getClientFingerprint,
+    checkRateLimit,
+    getRateLimitHeaders,
+    resetRateLimit,
+    AUTH_CONSTANTS,
+} from '@/lib/auth'
 
-// Rate limiting constants
-const RATE_LIMIT_WINDOW_MINUTES = 15
-const MAX_ATTEMPTS = 5
+const {
+    PIN_MAX_ATTEMPTS_PER_IP: MAX_IP_ATTEMPTS,
+    PIN_MAX_ATTEMPTS_PER_IDENTIFIER: MAX_RESTAURANT_ATTEMPTS,
+    PIN_RATE_LIMIT_WINDOW_MINUTES: RATE_LIMIT_WINDOW_MIN,
+} = AUTH_CONSTANTS
 
-// Create admin client for server-side operations
-function getAdminClient() {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-    if (!supabaseUrl || !supabaseServiceKey) {
-        throw new Error('Supabase configuration missing')
-    }
-
-    return createClient(supabaseUrl, supabaseServiceKey)
+const IP_RATE_CONFIG = {
+    maxRequests: MAX_IP_ATTEMPTS,
+    windowMs: RATE_LIMIT_WINDOW_MIN * 60 * 1000,
+    lockoutDurationMs: RATE_LIMIT_WINDOW_MIN * 60 * 1000,
 }
 
-// Database-backed rate limiting (works with serverless)
-async function checkRateLimit(
-    supabase: ReturnType<typeof getAdminClient>,
-    identifier: string,
-    type: 'ip' | 'restaurant'
-): Promise<{ allowed: boolean; remainingAttempts: number; retryAfter?: number }> {
-    try {
-        // Check rate limit using database function
-        const { data, error } = await supabase.rpc('check_otp_rate_limit', {
-            p_identifier: identifier,
-            p_identifier_type: type,
-            p_max_requests: MAX_ATTEMPTS,
-            p_window_minutes: RATE_LIMIT_WINDOW_MINUTES
-        })
-
-        if (error) {
-            console.error('Rate limit check error:', error)
-            // Fail open but log the error
-            return { allowed: true, remainingAttempts: MAX_ATTEMPTS - 1 }
-        }
-
-        if (data && data.length > 0) {
-            const result = data[0]
-            return {
-                allowed: result.allowed,
-                remainingAttempts: result.remaining_requests,
-                retryAfter: result.retry_after_seconds > 0 ? result.retry_after_seconds : undefined
-            }
-        }
-
-        return { allowed: true, remainingAttempts: MAX_ATTEMPTS - 1 }
-    } catch (err) {
-        console.error('Rate limit error:', err)
-        return { allowed: true, remainingAttempts: MAX_ATTEMPTS - 1 }
-    }
+const RESTAURANT_RATE_CONFIG = {
+    maxRequests: MAX_RESTAURANT_ATTEMPTS,
+    windowMs: RATE_LIMIT_WINDOW_MIN * 60 * 1000,
 }
 
-// Reset rate limit on successful login (optional, could keep for audit)
-async function resetRateLimit(
-    supabase: ReturnType<typeof getAdminClient>,
-    identifier: string,
-    type: 'ip' | 'restaurant'
-): Promise<void> {
-    try {
-        await supabase
-            .from('otp_rate_limits')
-            .delete()
-            .eq('identifier', identifier)
-            .eq('identifier_type', type)
-    } catch (err) {
-        // Non-critical, just log
-        console.error('Rate limit reset error:', err)
-    }
+function buildSafeStaffResponse(staff: Record<string, unknown>) {
+    const { pin, temp_pin, ...safe } = staff
+    return safe
 }
 
 export async function POST(request: NextRequest) {
     try {
-        const supabase = getAdminClient()
+        const supabase = createAdminClient()
 
-        const { restaurantSlug, pin } = await request.json()
-
-        if (!restaurantSlug || !pin) {
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
             return NextResponse.json(
-                { success: false, error: 'Restaurant code and PIN are required' },
+                { success: false, error: 'Invalid request body' },
                 { status: 400 }
             )
         }
 
-        // Validate PIN format (4-6 digits)
-        if (!/^\d{4,6}$/.test(pin)) {
+        const { restaurantSlug: rawSlug, pin: rawPin } = body as Record<string, unknown>
+        const restaurantSlug = validateSlug(rawSlug)
+        const pin = validatePin(rawPin as string, 4, 6)
+
+        if (!restaurantSlug) {
             return NextResponse.json(
-                { success: false, error: 'Invalid PIN format' },
+                { success: false, error: 'Valid facility code is required' },
                 { status: 400 }
             )
         }
 
-        // Get client IP
-        const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-            request.headers.get('x-real-ip') ||
-            'unknown'
+        if (!pin) {
+            return NextResponse.json(
+                { success: false, error: 'PIN must be 4-6 digits' },
+                { status: 400 }
+            )
+        }
 
-        // Check rate limit by IP first
-        const ipRateCheck = await checkRateLimit(supabase, ip, 'ip')
-        if (!ipRateCheck.allowed) {
+        const clientIp = getClientIp(request)
+        const fingerprint = getClientFingerprint(request)
+
+        const ipRateResult = checkRateLimit(`staff_login:ip:${clientIp}`, IP_RATE_CONFIG)
+        if (!ipRateResult.allowed) {
+            await logAuthEvent(createAuditEvent('rate_limit_exceeded', clientIp, clientIp, { type: 'staff_login_ip' }))
             return NextResponse.json(
                 {
                     success: false,
-                    error: `Too many login attempts from your network. Please try again in ${Math.ceil((ipRateCheck.retryAfter || 60) / 60)} minutes.`,
-                    retryAfter: ipRateCheck.retryAfter
+                    error: `Too many login attempts from your network. Please try again in ${Math.ceil(ipRateResult.retryAfterMs / 60000)} minutes.`,
+                    retryAfter: Math.ceil(ipRateResult.retryAfterMs / 1000),
                 },
+                { status: 429, headers: getRateLimitHeaders(ipRateResult, IP_RATE_CONFIG) }
+            )
+        }
+
+        const restaurantRateResult = checkRateLimit(`staff_login:restaurant:${restaurantSlug}`, RESTAURANT_RATE_CONFIG)
+        if (!restaurantRateResult.allowed) {
+            await logAuthEvent(createAuditEvent('rate_limit_exceeded', restaurantSlug, clientIp, { type: 'staff_login_restaurant' }))
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: `Too many login attempts for this facility. Please try again in ${Math.ceil(restaurantRateResult.retryAfterMs / 60000)} minutes.`,
+                    retryAfter: Math.ceil(restaurantRateResult.retryAfterMs / 1000),
+                },
+                { status: 429, headers: getRateLimitHeaders(restaurantRateResult, RESTAURANT_RATE_CONFIG) }
+            )
+        }
+
+        let dbIpResult: { data?: any; error?: any } | null = null
+        try {
+            dbIpResult = await supabase.rpc('check_otp_rate_limit', {
+                p_identifier: clientIp,
+                p_identifier_type: 'ip',
+                p_max_requests: MAX_IP_ATTEMPTS,
+                p_window_minutes: RATE_LIMIT_WINDOW_MIN,
+            })
+        } catch {
+            dbIpResult = null
+        }
+
+        if (dbIpResult?.data?.[0] && !dbIpResult.data[0].allowed) {
+            return NextResponse.json(
+                { success: false, error: 'Too many attempts. Please try again later.', retryAfter: dbIpResult.data[0].retry_after_seconds },
                 { status: 429 }
             )
         }
 
-        // Check rate limit by restaurant slug
-        const restaurantRateCheck = await checkRateLimit(supabase, restaurantSlug, 'restaurant')
-        if (!restaurantRateCheck.allowed) {
-            return NextResponse.json(
-                {
-                    success: false,
-                    error: `Too many login attempts for this facility. Please try again in ${Math.ceil((restaurantRateCheck.retryAfter || 60) / 60)} minutes.`,
-                    retryAfter: restaurantRateCheck.retryAfter
-                },
-                { status: 429 }
-            )
-        }
-
-        // Find restaurant by slug
         const { data: restaurant, error: restaurantError } = await supabase
             .from('restaurants')
             .select('id, name, slug, logo_url, currency, tax_rate, settings, is_active')
-            .eq('slug', restaurantSlug.toLowerCase())
+            .eq('slug', restaurantSlug)
             .single()
 
         if (restaurantError || !restaurant) {
+            await logAuthEvent(createAuditEvent('staff_login_failure', restaurantSlug, clientIp, { reason: 'restaurant_not_found' }))
             return NextResponse.json(
                 { success: false, error: 'Facility not found. Check the facility code.' },
                 { status: 404 }
@@ -140,13 +132,13 @@ export async function POST(request: NextRequest) {
         }
 
         if (!restaurant.is_active) {
+            await logAuthEvent(createAuditEvent('staff_login_failure', restaurantSlug, clientIp, { reason: 'restaurant_inactive' }))
             return NextResponse.json(
                 { success: false, error: 'This facility is currently inactive.' },
                 { status: 403 }
             )
         }
 
-        // Find all active staff for this restaurant
         const { data: staffList, error: staffError } = await supabase
             .from('staff')
             .select('id, restaurant_id, user_id, name, email, pin, role, is_active, created_at')
@@ -154,19 +146,18 @@ export async function POST(request: NextRequest) {
             .eq('is_active', true)
 
         if (staffError || !staffList || staffList.length === 0) {
+            await logAuthEvent(createAuditEvent('staff_login_failure', restaurantSlug, clientIp, { reason: 'no_active_staff' }))
             return NextResponse.json(
                 { success: false, error: 'No active staff members found for this facility.' },
                 { status: 404 }
             )
         }
 
-        // Try to match PIN with each staff member
-        let matchedStaff = null
+        let matchedStaff: Record<string, unknown> | null = null
 
         for (const staff of staffList) {
             if (!staff.pin) continue
 
-            // Check if PIN is hashed (bcrypt hashes start with $2)
             if (staff.pin.startsWith('$2')) {
                 try {
                     const isMatch = await bcrypt.compare(pin, staff.pin)
@@ -174,47 +165,42 @@ export async function POST(request: NextRequest) {
                         matchedStaff = staff
                         break
                     }
-                } catch (err) {
-                    // Invalid hash format, skip
+                } catch {
                     continue
                 }
             } else {
-                // Plain text comparison (legacy - should be migrated)
-                // This is intentionally kept for backward compatibility during migration
                 if (staff.pin === pin) {
                     matchedStaff = staff
-
-                    // Auto-migrate: Hash the PIN for future logins
-                    const hashedPin = await bcrypt.hash(pin, 10)
+                    const hashedPin = await bcrypt.hash(pin, AUTH_CONSTANTS.PIN_BCRYPT_ROUNDS)
                     await supabase
                         .from('staff')
                         .update({ pin: hashedPin })
                         .eq('id', staff.id)
-
                     break
                 }
             }
         }
 
         if (!matchedStaff) {
+            await logAuthEvent(createAuditEvent('staff_login_failure', restaurantSlug, clientIp, { reason: 'invalid_pin', fingerprint }))
+            const remainingAttempts = Math.min(ipRateResult.remainingRequests, restaurantRateResult.remainingRequests)
+
             return NextResponse.json(
-                {
-                    success: false,
-                    error: 'Invalid PIN.',
-                    remainingAttempts: Math.min(ipRateCheck.remainingAttempts, restaurantRateCheck.remainingAttempts)
-                },
+                { success: false, error: 'Invalid PIN.', remainingAttempts },
                 { status: 401 }
             )
         }
 
-        // Success - reset rate limits
-        await Promise.all([
-            resetRateLimit(supabase, ip, 'ip'),
-            resetRateLimit(supabase, restaurantSlug, 'restaurant')
-        ])
+        resetRateLimit(`staff_login:ip:${clientIp}`)
+        resetRateLimit(`staff_login:restaurant:${restaurantSlug}`)
 
-        // Remove sensitive data before returning
-        const { pin: _, ...safeStaff } = matchedStaff
+        await logAuthEvent(createAuditEvent('staff_login', (matchedStaff as Record<string, unknown>).email as string, clientIp, {
+            staffId: matchedStaff.id as string,
+            role: matchedStaff.role as string,
+            restaurantSlug,
+        }))
+
+        const safeStaff = buildSafeStaffResponse(matchedStaff)
 
         return NextResponse.json({
             success: true,
@@ -227,13 +213,12 @@ export async function POST(request: NextRequest) {
                 currency: restaurant.currency,
                 tax_rate: restaurant.tax_rate,
                 settings: restaurant.settings,
-            }
+            },
         })
-
-    } catch (error) {
-        console.error('Staff login error:', error)
+    } catch (error: unknown) {
+        console.error('[STAFF_LOGIN] Error:', error instanceof Error ? error.message : 'Unknown error')
         return NextResponse.json(
-            { success: false, error: 'An unexpected error occurred. Please try again.' },
+            { success: false, error: sanitizeErrorMessage(error) },
             { status: 500 }
         )
     }

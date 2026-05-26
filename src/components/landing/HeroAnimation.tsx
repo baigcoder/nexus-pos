@@ -3,6 +3,9 @@
 import { motion } from 'framer-motion'
 import { cn } from '@/lib/utils'
 
+// Static widths to avoid hydration mismatch
+const SKELETON_WIDTHS = [75, 52, 44, 67]
+
 export function HeroAnimation() {
     return (
         <div className="relative w-full aspect-[16/10] bg-white dark:bg-neutral-900 rounded-[2rem] border-8 border-neutral-100 dark:border-neutral-800 shadow-2xl overflow-hidden flex">
@@ -11,7 +14,7 @@ export function HeroAnimation() {
                 <div className="w-8 h-8 bg-primary/10 rounded-lg" />
                 <div className="space-y-3">
                     {[1, 2, 3, 4].map((i) => (
-                        <div key={i} className={cn("h-2 rounded-full bg-neutral-100 dark:bg-neutral-800", i === 1 && "bg-primary/20")} style={{ width: `${Math.random() * 40 + 40}%` }} />
+                        <div key={i} className={cn("h-2 rounded-full bg-neutral-100 dark:bg-neutral-800", i === 1 && "bg-primary/20")} style={{ width: `${SKELETON_WIDTHS[i - 1]}%` }} />
                     ))}
                 </div>
             </div>

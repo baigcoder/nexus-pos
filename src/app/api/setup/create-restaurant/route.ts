@@ -1,24 +1,51 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
+
+function generateSlug(name: string) {
+    return name
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '')
+}
+
+async function getAvailableSlug(supabase: ReturnType<typeof createAdminClient>, baseSlug: string) {
+    let slug = baseSlug
+    let suffix = 2
+
+    while (suffix < 100) {
+        const { data } = await supabase
+            .from('restaurants')
+            .select('id')
+            .eq('slug', slug)
+            .maybeSingle()
+
+        if (!data) return slug
+
+        slug = `${baseSlug}-${suffix}`
+        suffix++
+    }
+
+    throw new Error('Could not generate a unique restaurant slug')
+}
 
 export async function POST(request: NextRequest) {
     try {
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-        const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+        const sessionClient = await createClient()
+        const { data: { user }, error: userError } = await sessionClient.auth.getUser()
 
-        if (!supabaseUrl || !supabaseServiceKey) {
+        if (userError || !user) {
             return NextResponse.json(
-                { error: 'Server configuration error' },
-                { status: 500 }
+                { error: 'Unauthorized. Please log in before creating a restaurant.' },
+                { status: 401 }
             )
         }
 
-        const supabase = createClient(supabaseUrl, supabaseServiceKey)
+        const supabase = createAdminClient()
 
         const body = await request.json()
         const {
-            owner_id,
-            user_email,
             name,
             slug,
             address,
@@ -29,77 +56,45 @@ export async function POST(request: NextRequest) {
             operating_hours
         } = body
 
-        if (!name || !slug) {
+        if (!name) {
             return NextResponse.json(
-                { error: 'Missing restaurant name or slug' },
+                { error: 'Restaurant name is required' },
                 { status: 400 }
             )
         }
 
-        let finalOwnerId = owner_id
-        const lookupEmail = user_email || email
+        const { data: existingRestaurant } = await supabase
+            .from('restaurants')
+            .select('id, name, slug')
+            .eq('owner_id', user.id)
+            .maybeSingle()
 
-        // If owner_id provided, verify it exists first
-        if (owner_id) {
-            const { data: userData, error: userError } = await supabase.auth.admin.getUserById(owner_id)
-            if (!userError && userData?.user) {
-                finalOwnerId = userData.user.id
-                console.log('Verified owner_id:', finalOwnerId)
-            } else {
-                console.log('owner_id invalid, will try email lookup')
-                finalOwnerId = null
-            }
-        }
-
-        // If no valid owner_id, look up by email using admin API
-        if (!finalOwnerId && lookupEmail) {
-            console.log('Looking up user by email:', lookupEmail)
-
-            // Use listUsers with pagination to find the user
-            let page = 1
-            let found = false
-
-            while (!found && page <= 10) { // Max 10 pages to avoid infinite loop
-                const { data, error } = await supabase.auth.admin.listUsers({
-                    page: page,
-                    perPage: 50
-                })
-
-                if (error) {
-                    console.error('listUsers error:', error)
-                    break
-                }
-
-                const user = data?.users?.find(u => u.email === lookupEmail)
-                if (user) {
-                    finalOwnerId = user.id
-                    console.log('Found user:', finalOwnerId)
-                    found = true
-                } else if (!data?.users || data.users.length < 50) {
-                    break // No more pages
-                }
-
-                page++
-            }
-        }
-
-        if (!finalOwnerId) {
+        if (existingRestaurant) {
             return NextResponse.json(
-                { error: `User not found. Please log in at /login first, then return to /setup.` },
+                { error: 'This account already has a restaurant.', restaurant: existingRestaurant },
+                { status: 409 }
+            )
+        }
+
+        const baseSlug = generateSlug(slug || name)
+        if (!baseSlug) {
+            return NextResponse.json(
+                { error: 'Restaurant name must contain letters or numbers' },
                 { status: 400 }
             )
         }
+        const finalSlug = await getAvailableSlug(supabase, baseSlug)
 
         // Create the restaurant
         const { data: restaurant, error: createError } = await supabase
             .from('restaurants')
             .insert({
-                owner_id: finalOwnerId,
-                name,
-                slug,
+                owner_id: user.id,
+                name: name.trim(),
+                slug: finalSlug,
                 address: address || '',
                 phone: phone || '',
-                email: email || lookupEmail || '',
+                email: email || user.email || '',
                 currency: currency || 'PKR',
                 tax_rate: tax_rate || 16,
                 operating_hours: operating_hours || {},
@@ -118,10 +113,10 @@ export async function POST(request: NextRequest) {
 
         return NextResponse.json({ success: true, restaurant })
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('API error:', error)
         return NextResponse.json(
-            { error: error?.message || 'Server error' },
+            { error: error instanceof Error ? error.message : 'Server error' },
             { status: 500 }
         )
     }

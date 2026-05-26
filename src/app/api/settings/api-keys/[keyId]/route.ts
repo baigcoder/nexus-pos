@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { revokeApiKey } from '@/lib/api-keys'
 import { createClient } from '@/lib/supabase/server'
-import { createClient as createAdminClient } from '@supabase/supabase-js'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { requireOwner } from '@/lib/api-auth'
 
 // DELETE /api/settings/api-keys/[keyId] - Revoke an API key
 export async function DELETE(
@@ -9,6 +10,9 @@ export async function DELETE(
     { params }: { params: Promise<{ keyId: string }> }
 ) {
     try {
+        const { auth, response } = await requireOwner()(request)
+        if (response) return response
+
         const { keyId } = await params
 
         if (!keyId) {
@@ -30,17 +34,7 @@ export async function DELETE(
         }
 
         // Get admin client for checking ownership
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-        const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-        if (!supabaseUrl || !supabaseServiceKey) {
-            return NextResponse.json(
-                { success: false, error: 'Server configuration error' },
-                { status: 500 }
-            )
-        }
-
-        const adminClient = createAdminClient(supabaseUrl, supabaseServiceKey)
+        const adminClient = createAdminClient()
 
         // Get the API key and verify ownership
         const { data: apiKey } = await adminClient

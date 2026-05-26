@@ -1,23 +1,26 @@
 import { createBrowserClient } from '@supabase/ssr'
 import type { AuthUser, Staff, Restaurant, UserRole } from '@/types'
+import { getSupabaseConfigError, getSupabasePublicKey, getSupabaseUrl, isSupabaseConfigured } from './config'
 
 // Singleton client for client-side usage
 let supabaseClient: ReturnType<typeof createBrowserClient> | null = null
+
+export { getSupabaseConfigError, isSupabaseConfigured }
 
 export function createClient() {
     // Return cached client if available
     if (supabaseClient) return supabaseClient
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    const supabaseUrl = getSupabaseUrl()
+    const supabasePublicKey = getSupabasePublicKey()
 
     // During build time or SSR, env vars might not be available
     // In Next.js, NEXT_PUBLIC vars are inlined at build time, but if they're missing,
     // we should throw a clear error
-    if (!supabaseUrl || !supabaseAnonKey) {
+    if (!supabaseUrl || !supabasePublicKey) {
         // Check if we're on the client side
         if (typeof window !== 'undefined') {
-            throw new Error('Supabase environment variables are not configured. Check NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.')
+            throw new Error(getSupabaseConfigError())
         }
         // During SSR/build, create a dummy client that will be replaced on client
         // This prevents build errors for client components
@@ -26,7 +29,7 @@ export function createClient() {
 
     supabaseClient = createBrowserClient(
         supabaseUrl || 'https://placeholder.supabase.co',
-        supabaseAnonKey || 'placeholder-key'
+        supabasePublicKey || 'placeholder-key'
     )
 
     return supabaseClient

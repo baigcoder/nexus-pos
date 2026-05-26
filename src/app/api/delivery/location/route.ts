@@ -1,21 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { getAuthenticatedStaff } from '@/lib/api-auth'
 
 // Create admin client for server-side operations
 function getAdminClient() {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-    if (!supabaseUrl || !supabaseServiceKey) {
-        throw new Error('Supabase configuration missing')
-    }
-
-    return createClient(supabaseUrl, supabaseServiceKey)
+    return createAdminClient()
 }
 
 // POST /api/delivery/location - Update rider location
 export async function POST(request: NextRequest) {
     try {
+        const auth = await getAuthenticatedStaff(request)
+        if (!auth) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+
         const supabase = getAdminClient()
 
         const body = await request.json()
@@ -34,6 +33,13 @@ export async function POST(request: NextRequest) {
             return NextResponse.json(
                 { error: 'rider_id, latitude, and longitude are required' },
                 { status: 400 }
+            )
+        }
+
+        if (rider_id !== auth.staffId && auth.role !== 'owner' && auth.role !== 'manager') {
+            return NextResponse.json(
+                { error: 'Cannot update another rider location' },
+                { status: 403 }
             )
         }
 
@@ -56,6 +62,13 @@ export async function POST(request: NextRequest) {
             return NextResponse.json(
                 { error: 'Rider not found' },
                 { status: 404 }
+            )
+        }
+
+        if (staff.restaurant_id !== auth.restaurantId) {
+            return NextResponse.json(
+                { error: 'Cannot update rider location for another restaurant' },
+                { status: 403 }
             )
         }
 

@@ -1,20 +1,23 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import {
-    Clock,
-    Calendar,
-    Users,
-    Play,
-    Square,
-    Coffee,
-    ChevronLeft,
-    ChevronRight,
-    Plus,
-    CheckCircle2,
-    AlertCircle,
-    Timer
+  Clock,
+  Users,
+  Calendar,
+  Play,
+  Square,
+  Coffee,
+  ChefHat,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  RefreshCw,
+  DollarSign,
+  Plus,
+  Edit2,
+  Trash2
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/toast'
@@ -23,358 +26,509 @@ import { Card, Button, Badge, Modal } from '@/components/ui/common'
 import { cn } from '@/lib/utils'
 
 interface Shift {
-    id: string
-    staff_id: string
-    staff_name?: string
-    role?: string
-    shift_date: string
-    clock_in: string | null
-    clock_out: string | null
-    scheduled_start: string | null
-    scheduled_end: string | null
-    status: 'scheduled' | 'active' | 'completed' | 'absent'
-    break_minutes: number
-    notes: string | null
+  id: string
+  staff_id: string
+  staff_name?: string
+  role: string
+  start_time: string
+  end_time: string | null
+  status: 'scheduled' | 'active' | 'completed' | 'cancelled'
+  tips_earned: number | null
+  orders_served: number | null
+  date: string // shift_date in DB
 }
 
-const today = new Date().toISOString().split('T')[0]
+interface Staff {
+  id: string
+  name: string
+  role: string
+}
+
+function isShiftAssignableStaff(member: Staff) {
+  return member.role !== 'owner'
+}
+
+const statusConfig = {
+  scheduled: { label: 'Scheduled', color: 'text-blue-500', bg: 'bg-blue-500/10' },
+  active: { label: 'Active', color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+  completed: { label: 'Completed', color: 'text-[var(--text-muted)]', bg: 'bg-[var(--surface-hover)]0/10' },
+  cancelled: { label: 'Cancelled', color: 'text-rose-500', bg: 'bg-rose-500/10' },
+}
+
+const roleConfig: Record<string, { color: string; bg: string; icon: any }> = {
+  waiter: { color: 'text-blue-500', bg: 'bg-blue-500/10', icon: Coffee },
+  kitchen: { color: 'text-rose-500', bg: 'bg-rose-500/10', icon: ChefHat },
+  cashier: { color: 'text-brand', bg: 'bg-brand-subtle', icon: DollarSign },
+  delivery: { color: 'text-brand', bg: 'bg-brand-subtle', icon: Users },
+  manager: { color: 'text-emerald-500', bg: 'bg-emerald-500/10', icon: Clock },
+}
 
 export default function ShiftsPage() {
-    const { restaurant } = useAuthStore()
-    const { success, error: showError } = useToast()
-    const [shifts, setShifts] = useState<Shift[]>([])
-    const [isLoading, setIsLoading] = useState(true)
-    const [selectedDate, setSelectedDate] = useState(today)
-    const [showAddModal, setShowAddModal] = useState(false)
+  const { restaurant, staff: currentStaff } = useAuthStore()
+  const { success, error: showError } = useToast()
+  const [shifts, setShifts] = useState<Shift[]>([])
+  const [staff, setStaff] = useState<Staff[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [showModal, setShowModal] = useState(false)
+  const [editingShift, setEditingShift] = useState<Shift | null>(null)
+  const [dateFilter, setDateFilter] = useState<'today' | 'week' | 'all'>('today')
+  const [statusFilter, setStatusFilter] = useState<Shift['status'] | 'all'>('all')
 
-    // Fetch from Supabase
-    useEffect(() => {
-        async function loadShifts() {
-            if (!restaurant?.id) return
-            setIsLoading(true)
-            try {
-                const supabase = createClient()
-                const { data, error } = await supabase
-                    .from('shifts')
-                    .select('*, staff:staff_id(name, role)')
-                    .eq('restaurant_id', restaurant.id)
-                    .eq('shift_date', selectedDate)
-                    .order('scheduled_start')
+  const loadData = useCallback(async () => {
+    if (!restaurant?.id) return
+    setIsLoading(true)
 
-                if (error) throw error
-                setShifts((data || []).map((s: any) => ({
-                    ...s,
-                    staff_name: s.staff?.name || 'Unknown',
-                    role: s.staff?.role || 'Staff'
-                })))
-            } catch (err) {
-                showError('Error', 'Failed to load shifts')
-            } finally {
-                setIsLoading(false)
-            }
-        }
-        loadShifts()
-    }, [restaurant?.id, selectedDate])
+    try {
+      const supabase = createClient()
 
-    const activeShifts = shifts.filter(s => s.status === 'active').length
-    const completedShifts = shifts.filter(s => s.status === 'completed').length
-    const scheduledShifts = shifts.filter(s => s.status === 'scheduled').length
-    const totalHours = shifts.reduce((sum, s) => {
-        if (s.clock_out && s.clock_in) {
-            const start = parseInt(s.clock_in.split(':')[0])
-            const end = parseInt(s.clock_out.split(':')[0])
-            return sum + (end - start)
-        }
-        return sum
-    }, 0)
+      // Get date range for filter
+      const today = new Date().toISOString().split('T')[0]
+      let startDate = today
+      let endDate = today
 
-    const handleClockIn = async (id: string) => {
-        try {
-            const supabase = createClient()
-            const now = new Date().toTimeString().slice(0, 5)
-            const { error } = await supabase
-                .from('shifts')
-                .update({ status: 'active', clock_in: now })
-                .eq('id', id)
+      if (dateFilter === 'week') {
+        const weekAgo = new Date()
+        weekAgo.setDate(weekAgo.getDate() - 7)
+        startDate = weekAgo.toISOString().split('T')[0]
+      }
 
-            if (error) throw error
-            setShifts(shifts.map(s => s.id === id ? { ...s, status: 'active' as const, clock_in: now } : s))
-            success('Clocked In', 'Shift started')
-        } catch (err) {
-            showError('Error', 'Failed to clock in')
-        }
+      // Fetch shifts
+      let query = supabase
+        .from('shifts')
+        .select('*')
+        .eq('restaurant_id', restaurant.id)
+        .order('shift_date', { ascending: false })
+        .order('start_time', { ascending: false })
+
+      if (dateFilter === 'today') {
+        query = query.eq('shift_date', today)
+      }
+
+      const { data: shiftsData, error: shiftsError } = await query
+
+      if (shiftsError) throw shiftsError
+
+      // Fetch staff for names
+      const { data: staffData } = await supabase
+        .from('staff')
+        .select('id, name, role')
+        .eq('restaurant_id', restaurant.id)
+
+      if (staffData) {
+        setStaff(staffData.filter(isShiftAssignableStaff))
+      }
+
+      // Map staff names to shifts
+      const staffMap = new Map<string, any>(staffData?.map((s: any) => [s.id, s]) || [])
+      const mappedShifts = (shiftsData || []).map((shift: any) => ({
+        ...shift,
+        staff_name: staffMap.get(shift.staff_id)?.name || 'Unknown',
+        role: staffMap.get(shift.staff_id)?.role || shift.role
+      }))
+
+      setShifts(mappedShifts)
+    } catch (err) {
+      console.error('Error loading shifts:', err)
+      showError('Error', 'Failed to load shifts')
+    } finally {
+      setIsLoading(false)
     }
+  }, [restaurant?.id, dateFilter, showError])
 
-    const handleClockOut = async (id: string) => {
-        try {
-            const supabase = createClient()
-            const now = new Date().toTimeString().slice(0, 5)
-            const { error } = await supabase
-                .from('shifts')
-                .update({ status: 'completed', clock_out: now })
-                .eq('id', id)
+  useEffect(() => {
+    loadData()
+  }, [loadData])
 
-            if (error) throw error
-            setShifts(shifts.map(s => s.id === id ? { ...s, status: 'completed' as const, clock_out: now } : s))
-            success('Clocked Out', 'Shift ended')
-        } catch (err) {
-            showError('Error', 'Failed to clock out')
-        }
+  const filteredShifts = shifts.filter(shift => {
+    if (statusFilter !== 'all' && shift.status !== statusFilter) return false
+    return true
+  })
+
+  const stats = {
+    total: shifts.length,
+    active: shifts.filter(s => s.status === 'active').length,
+    scheduled: shifts.filter(s => s.status === 'scheduled').length,
+    completed: shifts.filter(s => s.status === 'completed').length,
+  }
+
+  const handleStatusChange = async (shiftId: string, newStatus: Shift['status']) => {
+    try {
+      const supabase = createClient()
+      const updates: any = { status: newStatus }
+
+      if (newStatus === 'completed') {
+        updates.end_time = new Date().toISOString()
+      }
+
+      const { error } = await supabase
+        .from('shifts')
+        .update(updates)
+        .eq('id', shiftId)
+
+      if (error) throw error
+      setShifts(shifts.map(s => s.id === shiftId ? { ...s, ...updates } : s))
+      success('Updated', `Shift marked as ${newStatus}`)
+    } catch (err) {
+      showError('Error', 'Failed to update shift')
     }
+  }
 
-    const handleBreak = async (id: string) => {
-        try {
-            const shift = shifts.find(s => s.id === id)
-            if (!shift) return
+  const handleDelete = async (shiftId: string) => {
+    if (!confirm('Delete this shift?')) return
 
-            const supabase = createClient()
-            const { error } = await supabase
-                .from('shifts')
-                .update({ break_minutes: shift.break_minutes + 15 })
-                .eq('id', id)
-
-            if (error) throw error
-            setShifts(shifts.map(s => s.id === id ? { ...s, break_minutes: s.break_minutes + 15 } : s))
-            success('Break Added', '15 min break logged')
-        } catch (err) {
-            showError('Error', 'Failed to add break')
-        }
+    try {
+      const supabase = createClient()
+      const { error } = await supabase.from('shifts').delete().eq('id', shiftId)
+      if (error) throw error
+      setShifts(shifts.filter(s => s.id !== shiftId))
+      success('Deleted', 'Shift removed')
+    } catch (err) {
+      showError('Error', 'Failed to delete shift')
     }
+  }
 
-    const getStatusColor = (status: string) => {
-        switch (status) {
-            case 'active': return 'bg-emerald-500/20 text-emerald-500 border-emerald-500/30'
-            case 'completed': return 'bg-neutral-500/20 text-neutral-400 border-neutral-500/30'
-            case 'scheduled': return 'bg-blue-500/20 text-blue-500 border-blue-500/30'
-            case 'absent': return 'bg-rose-500/20 text-rose-500 border-rose-500/30'
-            default: return 'bg-neutral-800 text-neutral-500'
-        }
+  const handleStartShift = async (shiftId: string) => {
+    try {
+      const supabase = createClient()
+      const { error } = await supabase
+        .from('shifts')
+        .update({ status: 'active', start_time: new Date().toISOString() })
+        .eq('id', shiftId)
+
+      if (error) throw error
+      setShifts(shifts.map(s => s.id === shiftId ? { ...s, status: 'active', start_time: new Date().toISOString() } : s))
+      success('Shift Started', 'Staff is now on duty')
+    } catch (err) {
+      showError('Error', 'Failed to start shift')
     }
+  }
 
-    const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.05 } } }
-    const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 100 } } }
+  const handleEndShift = async (shiftId: string) => {
+    try {
+      const supabase = createClient()
+      const { error } = await supabase
+        .from('shifts')
+        .update({ status: 'completed', end_time: new Date().toISOString() })
+        .eq('id', shiftId)
 
-    return (
-        <motion.div variants={container} initial="hidden" animate="show" className="space-y-10 pb-24">
-            {/* Header */}
-            <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
-                <div className="space-y-3">
-                    <div className="flex items-center gap-3">
-                        <Badge variant="outline" className="bg-cyan-600/10 text-cyan-500 border-cyan-600/20 px-4 py-1.5 font-bold uppercase text-[10px] tracking-widest">
-                            <Clock className="w-3 h-3 mr-1" /> Shift Management
-                        </Badge>
-                    </div>
-                    <h1 className="text-3xl lg:text-5xl font-bold tracking-tight text-white uppercase">
-                        Staff <span className="text-cyan-500">Shifts</span>
-                    </h1>
-                    <p className="text-neutral-400 text-lg font-medium">
-                        <span className="text-white font-bold">{activeShifts} active</span> • {completedShifts} completed • {scheduledShifts} scheduled
-                    </p>
+      if (error) throw error
+      setShifts(shifts.map(s => s.id === shiftId ? { ...s, status: 'completed', end_time: new Date().toISOString() } : s))
+      success('Shift Ended', 'Staff shift completed')
+    } catch (err) {
+      showError('Error', 'Failed to end shift')
+    }
+  }
+
+  const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.05 } } }
+  const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 100 } } }
+
+  return (
+    <motion.div variants={container} initial="hidden" animate="show" className="space-y-8 pb-24">
+      {/* Header */}
+      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
+        <div className="space-y-3">
+          <Badge variant="outline" className="bg-blue-600/10 text-blue-500 border-blue-600/20 px-4 py-1.5 font-bold uppercase text-[10px] tracking-widest">
+            Staff Scheduling
+          </Badge>
+          <h1 className="text-3xl font-bold tracking-tight text-[var(--text-primary)]">
+            Shift <span className="text-blue-500">Management</span>
+          </h1>
+          <p className="text-[var(--text-muted)] text-lg font-medium">
+            <span className="text-[var(--text-primary)] font-bold">{stats.active} active</span> shifts today
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button
+            onClick={loadData}
+            variant="outline"
+            icon={RefreshCw}
+            isLoading={isLoading}
+            className="h-12 px-6 border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+          >
+            Refresh
+          </Button>
+          <Button
+            onClick={() => { setEditingShift(null); setShowModal(true); }}
+            icon={Plus}
+            className="h-12 px-6 bg-blue-600 hover:bg-blue-500 text-[var(--text-primary)]"
+          >
+            Schedule Shift
+          </Button>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[
+          { label: 'Total Shifts', value: stats.total, icon: Clock, color: 'text-[var(--text-primary)]' },
+          { label: 'Active', value: stats.active, icon: Play, color: 'text-emerald-500' },
+          { label: 'Scheduled', value: stats.scheduled, icon: Calendar, color: 'text-blue-500' },
+          { label: 'Completed', value: stats.completed, icon: CheckCircle2, color: 'text-[var(--text-muted)]' },
+        ].map((stat, idx) => (
+          <motion.div key={idx} variants={item}>
+            <Card className="p-5 bg-[var(--surface-raised)] border-[var(--border)]">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-2">{stat.label}</p>
+                  <h3 className={cn("text-2xl font-bold", stat.color)}>{stat.value}</h3>
                 </div>
-                <div className="flex gap-4">
-                    <div className="flex items-center gap-2 px-4 py-3 bg-neutral-900 border border-neutral-800 rounded-xl">
-                        <button className="w-8 h-8 rounded-lg bg-black flex items-center justify-center text-neutral-500 hover:text-white transition-colors">
-                            <ChevronLeft className="w-4 h-4" />
-                        </button>
-                        <span className="font-bold text-white px-4">
-                            {new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                        </span>
-                        <button className="w-8 h-8 rounded-lg bg-black flex items-center justify-center text-neutral-500 hover:text-white transition-colors">
-                            <ChevronRight className="w-4 h-4" />
-                        </button>
-                    </div>
-                    <Button onClick={() => setShowAddModal(true)} icon={Plus} className="h-14 px-10 bg-cyan-600 hover:bg-cyan-500 text-white font-bold uppercase tracking-widest text-xs">
-                        Add Shift
-                    </Button>
+                <div className="w-10 h-10 rounded-xl bg-[var(--surface)] border border-[var(--border)] flex items-center justify-center text-[var(--text-muted)]">
+                  <stat.icon className="w-5 h-5" />
                 </div>
-            </div>
+              </div>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
 
-            {/* Stats */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                {[
-                    { label: 'Active Now', value: activeShifts, icon: Play, color: 'text-emerald-500' },
-                    { label: 'Completed', value: completedShifts, icon: CheckCircle2, color: 'text-neutral-400' },
-                    { label: 'Scheduled', value: scheduledShifts, icon: Calendar, color: 'text-blue-500' },
-                    { label: 'Total Hours', value: totalHours, icon: Timer, color: 'text-cyan-500' },
-                ].map((stat, idx) => (
-                    <motion.div key={idx} variants={item}>
-                        <Card className="p-5 bg-neutral-900 border-neutral-800">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest mb-2">{stat.label}</p>
-                                    <h3 className={cn("text-2xl font-bold", stat.color)}>{stat.value}</h3>
-                                </div>
-                                <div className="w-10 h-10 rounded-xl bg-black border border-neutral-800 flex items-center justify-center text-neutral-600">
-                                    <stat.icon className="w-5 h-5" />
-                                </div>
-                            </div>
-                        </Card>
-                    </motion.div>
-                ))}
-            </div>
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row gap-4">
+        <div className="flex gap-2">
+          {(['today', 'week', 'all'] as const).map((filter) => (
+            <button
+              key={filter}
+              onClick={() => setDateFilter(filter)}
+              className={cn(
+                'h-10 px-4 rounded-xl text-xs font-bold uppercase tracking-widest transition-all',
+                dateFilter === filter ? 'bg-blue-600 text-[var(--text-primary)]' : 'bg-[var(--surface-raised)] border border-[var(--border)] text-[var(--text-muted)]'
+              )}
+            >
+              {filter === 'today' ? 'Today' : filter === 'week' ? 'This Week' : 'All'}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          {(['all', 'active', 'scheduled', 'completed'] as const).map((filter) => (
+            <button
+              key={filter}
+              onClick={() => setStatusFilter(filter)}
+              className={cn(
+                'h-10 px-4 rounded-xl text-xs font-bold uppercase tracking-widest transition-all',
+                statusFilter === filter ? 'bg-emerald-600 text-[var(--text-primary)]' : 'bg-[var(--surface-raised)] border border-[var(--border)] text-[var(--text-muted)]'
+              )}
+            >
+              {filter.charAt(0).toUpperCase() + filter.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
 
-            {/* Shifts List */}
-            <div className="space-y-4">
-                {shifts.map((shift) => (
-                    <motion.div key={shift.id} variants={item}>
-                        <Card className="p-6 bg-neutral-900 border-neutral-800 hover:border-neutral-700 transition-all">
-                            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                                <div className="flex items-center gap-6">
-                                    <div className={cn(
-                                        "w-14 h-14 rounded-xl flex items-center justify-center",
-                                        shift.status === 'active' ? 'bg-emerald-500/20' : 'bg-neutral-800'
-                                    )}>
-                                        <span className={cn(
-                                            "text-lg font-bold",
-                                            shift.status === 'active' ? 'text-emerald-500' : 'text-neutral-500'
-                                        )}>
-                                            {(shift.staff_name || 'Unknown').split(' ').map(n => n[0]).join('')}
-                                        </span>
-                                    </div>
-                                    <div>
-                                        <div className="flex items-center gap-3">
-                                            <h3 className="text-lg font-bold text-white">{shift.staff_name || 'Unknown'}</h3>
-                                            <Badge className={cn("font-bold text-[10px] uppercase tracking-widest border", getStatusColor(shift.status))}>
-                                                {shift.status}
-                                            </Badge>
-                                        </div>
-                                        <div className="flex items-center gap-4 mt-1 text-[10px] font-bold text-neutral-600 uppercase tracking-widest">
-                                            <span>{shift.role}</span>
-                                            <span className="flex items-center gap-1">
-                                                <Clock className="w-3 h-3" />
-                                                {shift.scheduled_start || shift.clock_in || '--:--'} - {shift.clock_out || 'Now'}
-                                            </span>
-                                            {shift.break_minutes > 0 && (
-                                                <span className="flex items-center gap-1">
-                                                    <Coffee className="w-3 h-3" />
-                                                    {shift.break_minutes}min break
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="flex gap-2">
-                                    {shift.status === 'scheduled' && (
-                                        <Button
-                                            size="sm"
-                                            icon={Play}
-                                            onClick={() => handleClockIn(shift.id)}
-                                            className="h-10 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] uppercase tracking-widest"
-                                        >
-                                            Clock In
-                                        </Button>
-                                    )}
-                                    {shift.status === 'active' && (
-                                        <>
-                                            <Button
-                                                size="sm"
-                                                variant="outline"
-                                                icon={Coffee}
-                                                onClick={() => handleBreak(shift.id)}
-                                                className="h-10 px-4 border-neutral-800 text-neutral-500 font-bold text-[10px] uppercase tracking-widest"
-                                            >
-                                                Break
-                                            </Button>
-                                            <Button
-                                                size="sm"
-                                                icon={Square}
-                                                onClick={() => handleClockOut(shift.id)}
-                                                className="h-10 px-4 bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] uppercase tracking-widest"
-                                            >
-                                                Clock Out
-                                            </Button>
-                                        </>
-                                    )}
-                                    {shift.status === 'completed' && (
-                                        <div className="flex items-center gap-2 px-4 py-2 bg-neutral-800 rounded-lg">
-                                            <CheckCircle2 className="w-4 h-4 text-neutral-500" />
-                                            <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
-                                                {shift.clock_out && shift.clock_in ? (parseInt(shift.clock_out.split(':')[0]) - parseInt(shift.clock_in.split(':')[0])) : 0}h worked
-                                            </span>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        </Card>
-                    </motion.div>
-                ))}
-            </div>
+      {/* Shifts List */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+        </div>
+      ) : filteredShifts.length === 0 ? (
+        <Card className="p-20 bg-[var(--surface-raised)]/50 border-[var(--border)] text-center rounded-2xl border-dashed">
+          <Calendar className="w-12 h-12 text-[var(--text-muted)] mx-auto mb-4" />
+          <h3 className="text-xl font-bold text-[var(--text-primary)] mb-2">No Shifts Found</h3>
+          <p className="text-[var(--text-muted)] mb-6">Schedule your first shift to get started</p>
+          <Button
+            onClick={() => { setEditingShift(null); setShowModal(true); }}
+            icon={Plus}
+            className="bg-blue-600 hover:bg-blue-500"
+          >
+            Schedule Shift
+          </Button>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {filteredShifts.map((shift) => {
+            const cfg = statusConfig[shift.status]
+            const roleInfo = roleConfig[shift.role] || { color: 'text-[var(--text-muted)]', bg: 'bg-[var(--surface-hover)]0/10', icon: Clock }
 
-            {/* Add Shift Modal */}
-            <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Schedule Shift" size="md">
-                <AddShiftForm onSuccess={() => { setShowAddModal(false); success('Scheduled', 'Shift added') }} onCancel={() => setShowAddModal(false)} />
-            </Modal>
-        </motion.div>
-    )
+            return (
+              <motion.div key={shift.id} variants={item}>
+                <Card className="p-6 bg-[var(--surface-raised)] border-[var(--border)] hover:border-blue-500/30 transition-all">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                      <div className={cn("w-14 h-14 rounded-xl flex items-center justify-center", roleInfo.bg)}>
+                        <roleInfo.icon className={cn("w-6 h-6", roleInfo.color)} />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-[var(--text-primary)]">{shift.staff_name}</h3>
+                        <div className="flex items-center gap-3 mt-1 text-xs text-[var(--text-muted)]">
+                          <span className="flex items-center gap-1">
+                            <Calendar className="w-3 h-3" />
+                            {new Date(shift.date).toLocaleDateString()}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {shift.start_time ? new Date(shift.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}
+                            {shift.end_time ? ` - ${new Date(shift.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <Badge className={cn("font-bold text-[10px] px-4 py-2 uppercase", cfg.bg, cfg.color)}>
+                        {cfg.label}
+                      </Badge>
+                      {shift.status === 'scheduled' && (
+                        <Button
+                          onClick={() => handleStartShift(shift.id)}
+                          className="h-10 px-6 bg-emerald-600 hover:bg-emerald-500 text-[var(--text-primary)] font-bold text-[10px] uppercase"
+                          icon={Play}
+                        >
+                          Start
+                        </Button>
+                      )}
+                      {shift.status === 'active' && (
+                        <Button
+                          onClick={() => handleEndShift(shift.id)}
+                          className="h-10 px-6 bg-rose-600 hover:bg-rose-500 text-[var(--text-primary)] font-bold text-[10px] uppercase"
+                          icon={Square}
+                        >
+                          End
+                        </Button>
+                      )}
+                      <button
+                        onClick={() => handleDelete(shift.id)}
+                        className="w-10 h-10 rounded-xl bg-[var(--surface-active)] flex items-center justify-center text-[var(--text-muted)] hover:text-rose-500 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </Card>
+              </motion.div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Schedule Modal */}
+      <Modal
+        isOpen={showModal}
+        onClose={() => { setShowModal(false); setEditingShift(null); }}
+        title="Schedule Shift"
+        size="md"
+      >
+        <ShiftForm
+          shift={editingShift}
+          staff={staff}
+          restaurantId={restaurant?.id || ''}
+          onSuccess={() => { setShowModal(false); setEditingShift(null); loadData(); }}
+          onCancel={() => { setShowModal(false); setEditingShift(null); }}
+        />
+      </Modal>
+    </motion.div>
+  )
 }
 
-function AddShiftForm({ onSuccess, onCancel }: { onSuccess: () => void; onCancel: () => void }) {
-    const [form, setForm] = useState({ staff: '', date: today, startTime: '09:00', endTime: '17:00' })
+function ShiftForm({ shift, staff, restaurantId, onSuccess, onCancel }: {
+  shift: Shift | null
+  staff: Staff[]
+  restaurantId: string
+  onSuccess: () => void
+  onCancel: () => void
+}) {
+  const { success, error: showError } = useToast()
+  const [isLoading, setIsLoading] = useState(false)
+  const assignableStaff = staff.filter(isShiftAssignableStaff)
+  const [form, setForm] = useState({
+    staffId: shift && assignableStaff.some(s => s.id === shift.staff_id) ? shift.staff_id : '',
+    date: shift?.date || new Date().toISOString().split('T')[0],
+    startTime: shift?.start_time ? String(shift.start_time).substring(0, 5) : '09:00',
+    endTime: shift?.end_time ? String(shift.end_time).substring(0, 5) : '17:00',
+  })
 
-    const handleChange = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-        setForm({ ...form, [field]: e.target.value })
+  const handleSubmit = async () => {
+    if (!form.staffId || !form.date) {
+      showError('Error', 'Please fill in all required fields')
+      return
     }
 
-    return (
-        <div className="space-y-6 py-4">
-            <div className="space-y-4">
-                <div>
-                    <label className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest mb-2 block">Staff Member</label>
-                    <select
-                        value={form.staff}
-                        onChange={handleChange('staff')}
-                        className="w-full h-14 bg-black border border-neutral-800 rounded-xl px-4 text-white focus:border-cyan-600 outline-none appearance-none"
-                    >
-                        <option value="">Select staff...</option>
-                        <option value="1">Ahmed Khan - Waiter</option>
-                        <option value="2">Sara Ali - Cashier</option>
-                        <option value="3">Bilal Hassan - Kitchen</option>
-                        <option value="4">Fatima Zahra - Waiter</option>
-                    </select>
-                </div>
-                <div>
-                    <label className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest mb-2 block">Date</label>
-                    <input
-                        type="date"
-                        value={form.date}
-                        onChange={handleChange('date')}
-                        className="w-full h-14 bg-black border border-neutral-800 rounded-xl px-4 text-white focus:border-cyan-600 outline-none"
-                    />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                    <div>
-                        <label className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest mb-2 block">Start Time</label>
-                        <input
-                            type="time"
-                            value={form.startTime}
-                            onChange={handleChange('startTime')}
-                            className="w-full h-14 bg-black border border-neutral-800 rounded-xl px-4 text-white focus:border-cyan-600 outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest mb-2 block">End Time</label>
-                        <input
-                            type="time"
-                            value={form.endTime}
-                            onChange={handleChange('endTime')}
-                            className="w-full h-14 bg-black border border-neutral-800 rounded-xl px-4 text-white focus:border-cyan-600 outline-none"
-                        />
-                    </div>
-                </div>
-            </div>
+    setIsLoading(true)
+    try {
+      const supabase = createClient()
+      const payload = {
+        restaurant_id: restaurantId,
+        staff_id: form.staffId,
+        shift_date: form.date,
+        start_time: form.startTime,
+        end_time: form.endTime || null,
+        status: 'scheduled' as const,
+      }
 
-            <div className="flex gap-4">
-                <Button variant="outline" onClick={onCancel} className="flex-1 h-14 border-neutral-800 text-neutral-500">
-                    Cancel
-                </Button>
-                <Button
-                    onClick={onSuccess}
-                    disabled={!form.staff}
-                    className="flex-1 h-14 bg-cyan-600 hover:bg-cyan-500 text-white font-bold uppercase tracking-widest text-xs"
-                >
-                    Schedule Shift
-                </Button>
-            </div>
+      if (shift) {
+        const { error } = await supabase.from('shifts').update(payload).eq('id', shift.id)
+        if (error) throw error
+        success('Updated', 'Shift updated successfully')
+      } else {
+        const { error } = await supabase.from('shifts').insert(payload)
+        if (error) throw error
+        success('Created', 'Shift scheduled successfully')
+      }
+      onSuccess()
+    } catch (err) {
+      console.error('Shift error:', err)
+      showError('Error', 'Failed to save shift')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <div className="space-y-6 py-4">
+      <div>
+        <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest mb-2 block">Staff Member</label>
+        <select
+          value={form.staffId}
+          onChange={(e) => setForm({ ...form, staffId: e.target.value })}
+          className="w-full h-12 bg-[var(--surface-active)] border border-[var(--border-strong)] rounded-xl px-4 text-[var(--text-primary)]"
+        >
+          <option value="">Select staff...</option>
+          {assignableStaff.map((s) => (
+            <option key={s.id} value={s.id}>{s.name} ({s.role})</option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest mb-2 block">Date</label>
+        <input
+          type="date"
+          value={form.date}
+          onChange={(e) => setForm({ ...form, date: e.target.value })}
+          className="w-full h-12 bg-[var(--surface-active)] border border-[var(--border-strong)] rounded-xl px-4 text-[var(--text-primary)]"
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest mb-2 block">Start Time</label>
+          <input
+            type="time"
+            value={form.startTime}
+            onChange={(e) => setForm({ ...form, startTime: e.target.value })}
+            className="w-full h-12 bg-[var(--surface-active)] border border-[var(--border-strong)] rounded-xl px-4 text-[var(--text-primary)]"
+          />
         </div>
-    )
+        <div>
+          <label className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-widest mb-2 block">End Time</label>
+          <input
+            type="time"
+            value={form.endTime}
+            onChange={(e) => setForm({ ...form, endTime: e.target.value })}
+            className="w-full h-12 bg-[var(--surface-active)] border border-[var(--border-strong)] rounded-xl px-4 text-[var(--text-primary)]"
+          />
+        </div>
+      </div>
+
+      <div className="flex gap-4 pt-4">
+        <Button variant="outline" onClick={onCancel} className="flex-1 h-12 border-[var(--border-strong)] text-[var(--text-muted)]">
+          Cancel
+        </Button>
+        <Button
+          onClick={handleSubmit}
+          isLoading={isLoading}
+          disabled={!form.staffId || !form.date}
+          className="flex-1 h-12 bg-blue-600 hover:bg-blue-500 text-[var(--text-primary)]"
+        >
+          {shift ? 'Update' : 'Schedule'}
+        </Button>
+      </div>
+    </div>
+  )
 }

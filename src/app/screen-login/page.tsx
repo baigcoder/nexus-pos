@@ -64,14 +64,8 @@ export default function ScreenLoginPage() {
 
             success('Connected!', `Display ready: ${screen.name}`)
 
-            // Redirect based on screen type
-            if (screen.screen_type === 'kitchen') {
-                router.push(`/dashboard/kitchen`)
-            } else if (screen.screen_type === 'order_status') {
-                router.push(`/display/${restaurant.slug}?mode=orders`)
-            } else {
-                router.push(`/display/${restaurant.slug}`)
-            }
+            // Redirect to display page with screenId for proper loading
+            router.push(`/display/${restaurant.slug}?screen=${screen.id}`)
 
         } catch (err: any) {
             showError('Error', err.message || 'Failed to connect')

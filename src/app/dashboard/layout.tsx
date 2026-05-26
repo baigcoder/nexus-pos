@@ -1,113 +1,163 @@
 'use client'
 
-import { useState, ReactNode, useEffect } from 'react'
+import { useState, ReactNode, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-    LayoutDashboard,
-    UtensilsCrossed,
-    Grid3X3,
-    ClipboardList,
-    ChefHat,
-    Receipt,
-    BarChart3,
-    Users,
-    Settings,
-    LogOut,
-    Menu,
-    Bell,
-    ChevronDown,
-    Shield,
-    Activity,
-    Search,
-    TrendingUp,
-    Star,
-    Truck,
-    Award,
-    QrCode,
-    Clock,
-    DollarSign,
-    Tv,
+    LayoutDashboard, UtensilsCrossed, Grid3X3, ClipboardList, ChefHat,
+    Receipt, BarChart3, Users, Settings, LogOut, Menu, Bell, ChevronDown,
+    Shield, Activity, TrendingUp, Star, Truck, Award, QrCode,
+    Clock, DollarSign, Tv, ChevronRight, LifeBuoy, MessageCircle,
+    UserCircle, Store, CalendarClock, BadgeCheck, UserCog,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { useAuthStore } from '@/stores'
+import { useAuthStore, hasPermission } from '@/stores'
 import { useToast } from '@/components/ui/toast'
-import { Button, PremiumLayout } from '@/components/ui/common'
 import { ChatWidget } from '@/components/chat/ChatWidget'
+import { AuthGuard } from '@/components/AuthGuard'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { useUnreadNotifications } from '@/hooks/use-unread-notifications'
 import { cn } from '@/lib/utils'
+import { AccessDeniedPage } from '@/components/AccessDeniedPage'
 import type { UserRole } from '@/types'
+import type { Permission } from '@/stores'
+import {
+    Avatar, AvatarFallback, AvatarImage,
+    DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+    Badge,
+} from '@/components/ui'
 
-interface DashboardLayoutProps {
-    children: ReactNode
-}
+interface DashboardLayoutProps { children: ReactNode }
 
-const sidebarLinks: Array<{
+/* ============================================
+   NAVIGATION CONFIG
+   ============================================ */
+
+interface NavItem {
     href: string
     label: string
-    icon: any
-    roles: UserRole[] | 'all'
-    section?: string
-}> = [
-        // Owner/Manager Overview
-        { href: '/dashboard', label: 'Overview', icon: LayoutDashboard, roles: ['owner', 'manager'], section: 'main' },
+    icon: React.ElementType
+    permission: Permission
+}
 
-        // Waiter Features
-        { href: '/dashboard/waiter', label: 'Waiter Station', icon: Activity, roles: ['waiter'], section: 'main' },
-        { href: '/dashboard/menu', label: 'Menu', icon: UtensilsCrossed, roles: ['owner', 'manager', 'waiter', 'cashier'], section: 'main' },
-        { href: '/dashboard/take-order', label: 'Take Order', icon: ClipboardList, roles: ['waiter'], section: 'orders' },
-        { href: '/dashboard/my-orders', label: 'My Orders', icon: ClipboardList, roles: ['waiter', 'kitchen'], section: 'orders' },
-        { href: '/dashboard/tables', label: 'Tables', icon: Grid3X3, roles: ['owner', 'manager', 'waiter', 'cashier'], section: 'main' },
-        { href: '/dashboard/kitchen-view', label: 'Kitchen View', icon: ChefHat, roles: ['waiter'], section: 'orders' },
+interface NavSection {
+    title: string
+    items: NavItem[]
+}
 
-        // Cashier Features
-        { href: '/dashboard/cashier', label: 'Cashier Station', icon: Receipt, roles: ['cashier'], section: 'main' },
-        { href: '/dashboard/billing', label: 'Billing', icon: Receipt, roles: ['owner', 'manager', 'cashier'], section: 'billing' },
+const navSections: NavSection[] = [
+    {
+        title: 'Operations',
+        items: [
+            { href: '/dashboard', label: 'Overview', icon: LayoutDashboard, permission: 'page:dashboard' },
+            { href: '/dashboard/orders', label: 'Orders', icon: ClipboardList, permission: 'page:orders' },
+            { href: '/dashboard/tables', label: 'Tables', icon: Grid3X3, permission: 'page:tables' },
+            { href: '/dashboard/menu', label: 'Menu', icon: UtensilsCrossed, permission: 'page:menu' },
+            { href: '/dashboard/kitchen', label: 'Kitchen', icon: ChefHat, permission: 'page:kitchen' },
+            { href: '/dashboard/billing', label: 'Billing', icon: Receipt, permission: 'page:billing' },
+            { href: '/dashboard/cashier', label: 'Cashier', icon: DollarSign, permission: 'page:cashier' },
+        ]
+    },
+    {
+        title: 'Staff & Shifts',
+        items: [
+            { href: '/dashboard/staff', label: 'Staff', icon: Users, permission: 'page:staff' },
+            { href: '/dashboard/messages', label: 'Messages', icon: MessageCircle, permission: 'page:messages' },
+            { href: '/dashboard/shifts', label: 'Shifts', icon: Clock, permission: 'page:shifts' },
+            { href: '/dashboard/staff-performance', label: 'Performance', icon: TrendingUp, permission: 'page:staff_performance' },
+            { href: '/dashboard/my-shift', label: 'My Shift', icon: Activity, permission: 'page:my_shift' },
+            { href: '/dashboard/tips', label: 'Tips', icon: DollarSign, permission: 'page:tips' },
+        ]
+    },
+    {
+        title: 'Management',
+        items: [
+            { href: '/dashboard/inventory', label: 'Inventory', icon: ClipboardList, permission: 'page:inventory' },
+            { href: '/dashboard/reservations', label: 'Reservations', icon: Users, permission: 'page:reservations' },
+            { href: '/dashboard/discounts', label: 'Discounts', icon: Award, permission: 'page:discounts' },
+            { href: '/dashboard/delivery-monitor', label: 'Delivery', icon: Truck, permission: 'page:delivery_monitor' },
+            { href: '/dashboard/riders', label: 'Riders', icon: Truck, permission: 'page:riders' },
+        ]
+    },
+    {
+        title: 'Insights',
+        items: [
+            { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3, permission: 'page:analytics' },
+            { href: '/dashboard/reports', label: 'Reports', icon: ClipboardList, permission: 'page:reports' },
+            { href: '/dashboard/expenses', label: 'Expenses', icon: DollarSign, permission: 'page:expenses' },
+            { href: '/dashboard/feedback', label: 'Feedback', icon: Star, permission: 'page:feedback' },
+        ]
+    },
+    {
+        title: 'Setup',
+        items: [
+            { href: '/dashboard/qr-ordering', label: 'QR Codes', icon: QrCode, permission: 'page:qr_ordering' },
+            { href: '/dashboard/display-manager', label: 'Display', icon: Tv, permission: 'page:display_manager' },
+            { href: '/dashboard/settings', label: 'Settings', icon: Settings, permission: 'page:settings' },
+        ]
+    },
+]
 
-        // Kitchen Features
-        { href: '/dashboard/kitchen', label: 'Kitchen', icon: ChefHat, roles: ['owner', 'manager', 'kitchen'], section: 'main' },
+// Flat map for route guarding
+const routePermissionMap: Record<string, Permission> = {
+    '/dashboard': 'page:dashboard',
+    '/dashboard/orders': 'page:orders',
+    '/dashboard/my-orders': 'page:my_orders',
+    '/dashboard/take-order': 'page:take_order',
+    '/dashboard/tables': 'page:tables',
+    '/dashboard/menu': 'page:menu',
+    '/dashboard/kitchen': 'page:kitchen',
+    '/dashboard/kitchen-view': 'page:kitchen_view',
+    '/dashboard/cashier': 'page:cashier',
+    '/dashboard/billing': 'page:billing',
+    '/dashboard/delivery-boy': 'page:delivery_boy',
+    '/dashboard/delivery-monitor': 'page:delivery_monitor',
+    '/dashboard/riders': 'page:riders',
+    '/dashboard/staff': 'page:staff',
+    '/dashboard/staff-performance': 'page:staff_performance',
+    '/dashboard/shifts': 'page:shifts',
+    '/dashboard/my-shift': 'page:my_shift',
+    '/dashboard/tips': 'page:tips',
+    '/dashboard/inventory': 'page:inventory',
+    '/dashboard/reservations': 'page:reservations',
+    '/dashboard/discounts': 'page:discounts',
+    '/dashboard/specials': 'page:specials',
+    '/dashboard/reports': 'page:reports',
+    '/dashboard/analytics': 'page:analytics',
+    '/dashboard/expenses': 'page:expenses',
+    '/dashboard/feedback': 'page:feedback',
+    '/dashboard/loyalty': 'page:loyalty',
+    '/dashboard/qr-ordering': 'page:qr_ordering',
+    '/dashboard/display-manager': 'page:display_manager',
+    '/dashboard/settings': 'page:settings',
+    '/dashboard/messages': 'page:messages',
+    '/dashboard/order-desk': 'page:order_desk',
+}
 
-        // Orders & Operations
-        { href: '/dashboard/orders', label: 'Orders', icon: ClipboardList, roles: ['owner', 'manager', 'waiter', 'cashier'], section: 'orders' },
-        { href: '/dashboard/order-desk', label: 'Order Desk', icon: Activity, roles: ['owner', 'manager'], section: 'orders' },
-        { href: '/dashboard/specials', label: 'Specials', icon: Activity, roles: ['owner', 'manager'], section: 'menu' },
+const roleHomeRoutes: Record<UserRole, string> = {
+    owner: '/dashboard',
+    manager: '/dashboard',
+    waiter: '/dashboard/waiter',
+    kitchen: '/dashboard/kitchen',
+    cashier: '/dashboard/cashier',
+    delivery: '/dashboard/delivery-boy',
+    rider: '/dashboard/delivery-boy',
+}
 
-        // Delivery
-        { href: '/dashboard/riders', label: 'Riders', icon: Truck, roles: ['owner', 'manager'], section: 'delivery' },
-        { href: '/dashboard/delivery-monitor', label: 'Delivery Monitor', icon: Activity, roles: ['owner', 'manager'], section: 'delivery' },
-        { href: '/dashboard/delivery-boy', label: 'My Deliveries', icon: Truck, roles: ['delivery'], section: 'main' },
+const roleColors: Record<UserRole, { bg: string; text: string; dot: string }> = {
+    owner:   { bg: 'bg-orange-500/10', text: 'text-orange-500', dot: 'bg-orange-500' },
+    manager: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', dot: 'bg-emerald-500' },
+    waiter:  { bg: 'bg-sky-500/10', text: 'text-sky-500', dot: 'bg-sky-500' },
+    kitchen: { bg: 'bg-rose-500/10', text: 'text-rose-500', dot: 'bg-rose-500' },
+    cashier: { bg: 'bg-violet-500/10', text: 'text-violet-500', dot: 'bg-violet-500' },
+    delivery:{ bg: 'bg-amber-500/10', text: 'text-amber-500', dot: 'bg-amber-500' },
+    rider:   { bg: 'bg-amber-500/10', text: 'text-amber-500', dot: 'bg-amber-500' },
+}
 
-        // Staff Tools (All Roles)
-        { href: '/dashboard/my-shift', label: 'My Shift', icon: Clock, roles: ['waiter', 'cashier', 'kitchen', 'delivery'], section: 'staff' },
-        { href: '/dashboard/tips', label: 'Tips', icon: DollarSign, roles: ['waiter', 'delivery', 'cashier'], section: 'staff' },
-
-
-        // Management
-        { href: '/dashboard/inventory', label: 'Inventory', icon: ClipboardList, roles: ['owner', 'manager'], section: 'management' },
-        { href: '/dashboard/reservations', label: 'Reservations', icon: Users, roles: ['owner', 'manager'], section: 'management' },
-        { href: '/dashboard/discounts', label: 'Discounts', icon: Receipt, roles: ['owner', 'manager'], section: 'management' },
-
-        // Analytics & Reports
-        { href: '/dashboard/reports', label: 'Reports', icon: BarChart3, roles: ['owner', 'manager'], section: 'analytics' },
-        { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3, roles: ['owner', 'manager'], section: 'analytics' },
-
-        // Staff Management
-        { href: '/dashboard/staff', label: 'Staff', icon: Users, roles: ['owner', 'manager'], section: 'staff' },
-        { href: '/dashboard/staff-performance', label: 'Performance', icon: TrendingUp, roles: ['owner', 'manager'], section: 'staff' },
-        { href: '/dashboard/shifts', label: 'Shifts', icon: Clock, roles: ['owner', 'manager'], section: 'staff' },
-
-        // Customer
-        { href: '/dashboard/feedback', label: 'Feedback', icon: Star, roles: ['owner', 'manager'], section: 'customer' },
-        { href: '/dashboard/loyalty', label: 'Loyalty', icon: Award, roles: ['owner', 'manager'], section: 'customer' },
-        { href: '/dashboard/qr-ordering', label: 'QR Codes', icon: QrCode, roles: ['owner', 'manager'], section: 'customer' },
-
-        // Finance
-        { href: '/dashboard/expenses', label: 'Expenses', icon: DollarSign, roles: ['owner', 'manager'], section: 'finance' },
-
-        // Settings
-        { href: '/dashboard/display-manager', label: 'Display', icon: Tv, roles: ['owner', 'manager'], section: 'settings' },
-        { href: '/dashboard/settings', label: 'Settings', icon: Settings, roles: ['owner', 'manager'], section: 'settings' },
-    ]
+/* ============================================
+   LAYOUT COMPONENT
+   ============================================ */
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
     const pathname = usePathname()
@@ -115,59 +165,68 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     const { success } = useToast()
     const { user, restaurant, userRole, staff, logout: logoutStore, setRestaurant, setUser, setUserRole } = useAuthStore()
     const [isSidebarOpen, setIsSidebarOpen] = useState(false)
-    const [isProfileOpen, setIsProfileOpen] = useState(false)
+    const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['Operations']))
+    const unreadCount = useUnreadNotifications()
 
     const effectiveRole: UserRole = userRole || staff?.role || 'owner'
+    const rc = roleColors[effectiveRole]
 
-    // Auto-load restaurant if user is logged in but restaurant is not loaded
+    /* ---- Load context ---- */
     useEffect(() => {
-        const loadRestaurantContext = async () => {
-            // Skip if already loaded or no user
-            if (restaurant || staff) return
-
+        let cancelled = false
+        const load = async () => {
+            if ((restaurant?.id || staff?.id) && userRole) return
             const supabase = createClient()
-            const { data: { user: authUser } } = await supabase.auth.getUser()
+            const { data: { user: au } } = await supabase.auth.getUser()
+            if (!au || cancelled) return
 
-            if (!authUser) {
-                router.push('/login')
-                return
-            }
-
-            // Set user if missing
-            if (!user) {
-                // Google Auth stores name in different metadata fields
-                const displayName = authUser.user_metadata?.full_name
-                    || authUser.user_metadata?.name
-                    || authUser.email?.split('@')[0]
+            if (!user && !cancelled) {
                 setUser({
-                    id: authUser.id,
-                    email: authUser.email!,
-                    full_name: displayName,
+                    id: au.id,
+                    email: au.email!,
+                    full_name: au.user_metadata?.full_name || au.user_metadata?.name || au.email?.split('@')[0],
                 })
             }
-
-            // Load restaurant for owner
-            const { data: rest } = await supabase
-                .from('restaurants')
-                .select('*')
-                .eq('owner_id', authUser.id)
-                .single()
-
-            if (rest) {
-                setRestaurant(rest)
-                setUserRole('owner')
-            } else {
-                router.push('/setup')
+            if (restaurant?.id && !userRole && !cancelled) {
+                const { data: owned } = await supabase.from('restaurants').select('id').eq('owner_id', au.id).eq('id', restaurant.id).maybeSingle()
+                if (cancelled) return
+                if (owned) { setUserRole('owner'); return }
+                const { data: sr } = await supabase.from('staff').select('role').eq('user_id', au.id).maybeSingle()
+                if (!cancelled && sr) setUserRole(sr.role as UserRole)
+                return
+            }
+            if (!cancelled) {
+                const { data: r } = await supabase.from('restaurants').select('*').eq('owner_id', au.id).single()
+                if (cancelled) return
+                if (r) { setRestaurant(r); setUserRole('owner') }
+                else {
+                    const { data: sr } = await supabase.from('staff').select('id, role, restaurants(*)').eq('user_id', au.id).maybeSingle()
+                    if (!cancelled && !sr) router.push('/setup')
+                    else if (sr && sr.restaurants) { setRestaurant(sr.restaurants); setUserRole(sr.role as UserRole) }
+                }
             }
         }
+        load()
+        return () => { cancelled = true }
+    }, [restaurant?.id, user?.id, staff?.id, userRole, router, setRestaurant, setUser, setUserRole])
 
-        loadRestaurantContext()
-    }, [restaurant, user, staff, router, setRestaurant, setUser, setUserRole])
+    /* ---- RBAC route guard ---- */
+    useEffect(() => {
+        if (!userRole) return
+        const perm = routePermissionMap[pathname]
+        if (perm && !hasPermission(userRole, perm)) {
+            router.push(roleHomeRoutes[userRole] || '/staff-login')
+        }
+    }, [pathname, userRole, router])
 
-    const filteredLinks = sidebarLinks.filter(link => {
-        if (link.roles === 'all') return true
-        return link.roles.includes(effectiveRole)
-    })
+    const toggleSection = useCallback((title: string) => {
+        setExpandedSections(prev => {
+            const next = new Set(prev)
+            if (next.has(title)) next.delete(title)
+            else next.add(title)
+            return next
+        })
+    }, [])
 
     const handleLogout = async () => {
         const supabase = createClient()
@@ -177,211 +236,336 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         router.push('/login')
     }
 
+    const displayName = staff?.name || user?.full_name || user?.email?.split('@')[0] || 'User'
+    const initial = displayName[0]?.toUpperCase() || 'U'
+    const avatarUrl = staff?.avatar_url || user?.avatar_url || ''
+    const accountEmail = staff?.email || user?.email || ''
+    const accountPhone = staff?.phone || restaurant?.phone || ''
+    const isOwnerAccount = effectiveRole === 'owner'
+    const primaryAccountAction = isOwnerAccount
+        ? { label: 'Owner Profile', href: '/dashboard/profile', icon: UserCircle }
+        : { label: 'Staff Profile', href: '/dashboard/profile', icon: UserCircle }
+    const secondaryAccountAction = isOwnerAccount
+        ? { label: 'Restaurant Settings', href: '/dashboard/settings', icon: Settings }
+        : { label: 'My Shift', href: '/dashboard/my-shift', icon: CalendarClock }
+    const PrimaryAccountIcon = primaryAccountAction.icon
+    const SecondaryAccountIcon = secondaryAccountAction.icon
+
+    /* ---- Filtered nav ---- */
+    const filteredSections = navSections.map(sec => ({
+        ...sec,
+        items: sec.items.filter(i => hasPermission(effectiveRole, i.permission))
+    })).filter(sec => sec.items.length > 0)
 
     return (
-        <PremiumLayout fullWidth className="flex min-h-screen bg-black overflow-hidden">
-            {/* Mobile Sidebar Overlay */}
+        <div className="flex min-h-screen bg-[var(--background)] overflow-hidden">
+            <a href="#main-content" className="skip-link">Skip to main content</a>
+
+            {/* Mobile overlay */}
             <AnimatePresence>
                 {isSidebarOpen && (
                     <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                         onClick={() => setIsSidebarOpen(false)}
-                        className="fixed inset-0 bg-black/80 backdrop-blur-xl z-[60] lg:hidden"
+                        className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] lg:hidden"
+                        aria-hidden="true"
                     />
                 )}
             </AnimatePresence>
 
             {/* Sidebar */}
-            <aside className={cn(`
-                fixed top-0 left-0 bottom-0 w-72 z-[70]
-                bg-neutral-950 border-r border-neutral-900
-                transition-transform duration-500 ease-[0.16,1,0.3,1]
-                flex flex-col overflow-hidden
-                lg:translate-x-0
-                ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-            `)}>
-                <div className="flex flex-col h-full p-8">
-                    {/* Logo Section */}
-                    <div className="mb-10 px-4">
-                        <Link href="/dashboard" className="flex items-center gap-3 group">
-                            <div className="w-10 h-10 bg-orange-600 rounded-xl flex items-center justify-center shadow-xl shadow-orange-600/30 transition-transform duration-500 group-hover:scale-105">
-                                <Shield className="w-6 h-6 text-white" />
-                            </div>
-                            <span className="font-display font-bold text-xl tracking-tight text-white uppercase">
-                                Nexus <span className="text-orange-600">POS</span>
-                            </span>
-                        </Link>
-                    </div>
-
-                    {/* Navigation */}
-                    <nav className="flex-1 space-y-2 overflow-y-auto overflow-x-hidden pr-2 custom-scrollbar">
-                        {/* Role Badge */}
-                        <div className="mb-6 px-5">
-                            <div className={cn(
-                                "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest border",
-                                effectiveRole === 'owner' && 'bg-orange-600/10 text-orange-600 border-orange-600/20',
-                                effectiveRole === 'manager' && 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
-                                effectiveRole === 'waiter' && 'bg-blue-500/10 text-blue-500 border-blue-500/20',
-                                effectiveRole === 'cashier' && 'bg-purple-500/10 text-purple-500 border-purple-500/20',
-                                effectiveRole === 'kitchen' && 'bg-rose-500/10 text-rose-500 border-rose-500/20',
-                            )}>
-                                <div className={cn(
-                                    "w-1.5 h-1.5 rounded-full",
-                                    effectiveRole === 'owner' && 'bg-orange-600',
-                                    effectiveRole === 'manager' && 'bg-emerald-500',
-                                    effectiveRole === 'waiter' && 'bg-blue-500',
-                                    effectiveRole === 'cashier' && 'bg-purple-500',
-                                    effectiveRole === 'kitchen' && 'bg-rose-500',
-                                )} />
-                                {effectiveRole}
-                            </div>
+            <aside
+                className={cn(
+                    "fixed top-0 left-0 bottom-0 w-[260px] z-[70] bg-[var(--surface)] border-r border-[var(--border)]",
+                    "flex flex-col transition-transform duration-300 ease-out lg:translate-x-0",
+                    isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+                )}
+            >
+                {/* Logo */}
+                <div className="px-5 pt-6 pb-4">
+                    <Link href="/dashboard" className="flex items-center gap-3 group">
+                        <div className="w-9 h-9 rounded-lg bg-brand flex items-center justify-center shadow-glow">
+                            <Shield className="w-5 h-5 text-white" />
                         </div>
-                        <div className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest mb-6 px-5">Main Navigation</div>
-                        {filteredLinks.map((link) => {
-                            const isActive = pathname === link.href
-                            return (
-                                <Link
-                                    key={link.href}
-                                    href={link.href}
-                                    onClick={() => setIsSidebarOpen(false)}
-                                    className={cn(
-                                        'flex items-center gap-3 px-5 py-3 rounded-xl transition-all font-bold text-xs tracking-wider group relative overflow-hidden',
-                                        isActive
-                                            ? 'bg-white text-neutral-900 shadow-lg'
-                                            : 'text-neutral-500 hover:text-white hover:bg-neutral-900/50'
-                                    )}
+                        <span className="font-display font-bold text-lg tracking-tight text-[var(--text-primary)]">
+                            Nexus<span className="text-brand">POS</span>
+                        </span>
+                    </Link>
+                </div>
+
+                {/* Role badge */}
+                <div className="px-5 pb-4">
+                    <div className={cn("inline-flex items-center gap-2 px-2.5 py-1 rounded-md text-[11px] font-semibold uppercase tracking-wide border border-white/5", rc.bg, rc.text)}>
+                        <span className={cn("w-1.5 h-1.5 rounded-full", rc.dot)} />
+                        {effectiveRole}
+                    </div>
+                </div>
+
+                {/* Nav */}
+                <nav className="flex-1 overflow-y-auto px-3 pb-4 space-y-1" aria-label="Main navigation">
+                    {filteredSections.map(section => {
+                        const isExpanded = expandedSections.has(section.title)
+                        const hasActive = section.items.some(i => pathname === i.href)
+                        return (
+                            <div key={section.title} className="mb-2">
+                                <button
+                                    onClick={() => toggleSection(section.title)}
+                                    className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
+                                    aria-expanded={isExpanded}
                                 >
-                                    {isActive && (
+                                    {section.title}
+                                    <ChevronRight className={cn("w-3.5 h-3.5 transition-transform duration-200", isExpanded && "rotate-90")} />
+                                </button>
+                                <AnimatePresence initial={false}>
+                                    {isExpanded && (
                                         <motion.div
-                                            layoutId="sidebar-active"
-                                            className="absolute left-0 w-1 h-5 bg-orange-600 rounded-r-full"
-                                        />
-                                    )}
-                                    <link.icon className={cn('w-4 h-4 transition-colors', isActive ? 'text-orange-600' : 'group-hover:text-orange-600')} />
-                                    <span className="uppercase">{link.label}</span>
-                                </Link>
-                            )
-                        })}
-                    </nav>
-
-                    {/* Profile */}
-                    <div className="mt-8 pt-8 border-t border-neutral-900">
-                        <div className="relative">
-                            <button
-                                onClick={() => setIsProfileOpen(!isProfileOpen)}
-                                className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-neutral-900 transition-all group border border-transparent hover:border-neutral-800"
-                            >
-                                <div className="w-9 h-9 rounded-lg bg-white flex items-center justify-center text-neutral-900 font-bold text-xs shadow-lg">
-                                    {(staff?.name?.[0] || user?.full_name?.[0] || user?.email?.[0])?.toUpperCase()}
-                                </div>
-                                <div className="flex-1 text-left min-w-0">
-                                    <p className="text-xs font-bold text-white truncate uppercase tracking-tight">
-                                        {staff?.name || user?.full_name || user?.email?.split('@')[0] || 'Admin'}
-                                    </p>
-                                    <p className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">{effectiveRole}</p>
-                                </div>
-                                <ChevronDown className={cn('w-3 h-3 text-neutral-500 transition-transform group-hover:text-orange-600', isProfileOpen && 'rotate-180')} />
-                            </button>
-
-                            <AnimatePresence>
-                                {isProfileOpen && (
-                                    <motion.div
-                                        initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                                        exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                                        className="absolute bottom-full left-0 right-0 mb-4 bg-neutral-950 border border-neutral-800 rounded-3xl shadow-2xl overflow-hidden z-50 p-2"
-                                    >
-                                        <button
-                                            onClick={handleLogout}
-                                            className="w-full flex items-center gap-3 px-6 py-5 text-rose-500 hover:bg-rose-500/10 rounded-2xl transition-all text-[10px] font-bold uppercase tracking-widest"
+                                            initial={{ height: 0, opacity: 0 }}
+                                            animate={{ height: 'auto', opacity: 1 }}
+                                            exit={{ height: 0, opacity: 0 }}
+                                            transition={{ duration: 0.2 }}
+                                            className="overflow-hidden"
                                         >
-                                            <LogOut className="w-4 h-4" />
-                                            Logout
-                                        </button>
-                                    </motion.div>
-                                )}
-                            </AnimatePresence>
-                        </div>
-                    </div>
+                                            <ul className="space-y-0.5 mt-1">
+                                                {section.items.map(item => {
+                                                    const isActive = pathname === item.href
+                                                    return (
+                                                        <li key={item.href}>
+                                                            <Link
+                                                                href={item.href}
+                                                                onClick={() => setIsSidebarOpen(false)}
+                                                                className={cn(
+                                                                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all relative",
+                                                                    isActive
+                                                                        ? "bg-brand-subtle text-brand"
+                                                                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                                                                )}
+                                                                aria-current={isActive ? 'page' : undefined}
+                                                            >
+                                                                {isActive && (
+                                                                    <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-brand rounded-r-full" />
+                                                                )}
+                                                                <item.icon className={cn("w-4 h-4 flex-shrink-0", isActive && "text-brand")} />
+                                                                <span>{item.label}</span>
+                                                            </Link>
+                                                        </li>
+                                                    )
+                                                })}
+                                            </ul>
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </div>
+                        )
+                    })}
+                </nav>
+
+                {/* Profile */}
+                <div className="p-3 border-t border-[var(--border)] space-y-2">
+                    <DropdownMenu>
+                        <DropdownMenuTrigger className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-[var(--surface-hover)] transition-colors text-left group cursor-pointer">
+                            <Avatar className="w-8 h-8 border border-[var(--border)]">
+                                <AvatarFallback className="bg-[var(--surface-active)] text-[var(--text-primary)] text-xs font-semibold">
+                                    {initial}
+                                </AvatarFallback>
+                            </Avatar>
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-[var(--text-primary)] truncate">{displayName}</p>
+                                <p className="text-xs text-[var(--text-muted)] capitalize">{effectiveRole}</p>
+                            </div>
+                            <ChevronDown className="w-4 h-4 text-[var(--text-muted)] group-hover:text-[var(--text-secondary)] transition-colors" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-56 bg-[var(--surface-raised)] border-[var(--border)]">
+                            <div className="px-3 py-2">
+                                <p className="text-sm font-medium text-[var(--text-primary)]">{displayName}</p>
+                                <p className="text-xs text-[var(--text-muted)]">{user?.email || staff?.email}</p>
+                            </div>
+                            <DropdownMenuSeparator className="bg-[var(--border)]" />
+                            <DropdownMenuItem className="text-[var(--text-secondary)] focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)] cursor-pointer" onClick={() => router.push('/dashboard/profile')}>
+                                <Users className="w-4 h-4 mr-2" />
+                                Profile
+                            </DropdownMenuItem>
+                            <DropdownMenuItem className="text-[var(--text-secondary)] focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)] cursor-pointer" onClick={() => router.push('/dashboard/settings')}>
+                                <Settings className="w-4 h-4 mr-2" />
+                                Settings
+                            </DropdownMenuItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                    <button
+                        onClick={handleLogout}
+                        className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-red-500/10 text-red-400 transition-colors"
+                    >
+                        <LogOut className="w-4 h-4" />
+                        <span className="text-sm font-medium">Logout</span>
+                    </button>
                 </div>
             </aside>
 
-            {/* Content Plane */}
-            <div className="flex-1 lg:pl-72 transition-all duration-500 min-h-screen flex flex-col bg-black">
-                {/* Header - Show on all pages */}
-                {pathname && (
-                    <header className="sticky top-0 z-40 px-2 lg:px-4 py-6 flex items-center justify-between bg-black/80 backdrop-blur-3xl border-b border-neutral-900/50">
-                        <div className="flex items-center gap-6">
-                            <button
-                                onClick={() => setIsSidebarOpen(true)}
-                                className="lg:hidden w-12 h-12 flex items-center justify-center bg-neutral-900 hover:bg-neutral-800 rounded-2xl transition-colors border border-neutral-800"
-                            >
-                                <Menu className="w-6 h-6 text-white" />
-                            </button>
-
-                            <div className="hidden sm:flex items-center gap-3 px-6 h-14 bg-neutral-950 rounded-2xl border border-neutral-900 shadow-inner group">
-                                <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-glow shadow-emerald-500/50" />
-                                <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest group-hover:text-emerald-500 transition-colors">System Online</span>
-                            </div>
-                        </div>
-
-                        {/* Centered Search */}
-                        <div className="hidden lg:flex flex-1 max-w-2xl px-12">
-                            <div className="relative w-full group">
-                                <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-1/2 text-neutral-600 group-focus-within:text-orange-600 transition-colors" />
-                                <input
-                                    type="text"
-                                    placeholder="Search everything..."
-                                    className="h-14 w-full bg-neutral-950 rounded-2xl pl-16 pr-6 text-[10px] font-bold uppercase tracking-widest outline-none border border-neutral-900 focus:border-orange-600/30 focus:bg-black transition-all text-white placeholder:text-neutral-800 shadow-inner"
-                                />
-                            </div>
-                        </div>
-
-                        <div className="flex items-center gap-4 lg:gap-6">
-                            <Link href="/dashboard/kitchen">
-                                <Button
-                                    className="bg-white text-neutral-950 hover:bg-orange-600 hover:text-white rounded-2xl h-14 px-8 lg:px-10 font-bold uppercase tracking-widest text-[10px] shadow-lg transition-all border-none"
-                                    icon={ChefHat}
-                                >
-                                    Kitchen
-                                </Button>
-                            </Link>
-
-                            <button className="relative w-14 h-14 flex items-center justify-center bg-neutral-950 hover:bg-neutral-900 rounded-2xl transition-all border border-neutral-900 group shadow-lg">
-                                <Bell className="w-5 h-5 text-neutral-500 group-hover:text-orange-600 transition-colors" />
-                                <span className="absolute top-4 right-4 w-2 h-2 bg-orange-600 rounded-full border-2 border-black shadow-glow shadow-orange-600/50" />
-                            </button>
-                        </div>
-                    </header>
-                )}
-
-                {/* Mobile menu button for non-overview pages */}
-                {pathname !== '/dashboard' && (
-                    <div className="lg:hidden fixed top-4 left-4 z-50">
+            {/* Content */}
+            <div className="flex-1 lg:ml-[260px] min-h-screen flex flex-col">
+                {/* Header */}
+                <header className="sticky top-0 z-40 h-16 px-4 lg:px-6 flex items-center justify-between glass border-b border-[var(--border)]">
+                    <div className="flex items-center gap-4">
                         <button
                             onClick={() => setIsSidebarOpen(true)}
-                            className="w-12 h-12 flex items-center justify-center bg-neutral-900 hover:bg-neutral-800 rounded-2xl transition-colors border border-neutral-800 shadow-lg"
+                            className="lg:hidden w-9 h-9 flex items-center justify-center rounded-lg hover:bg-[var(--surface-hover)] transition-colors"
+                            aria-label="Open sidebar"
                         >
-                            <Menu className="w-6 h-6 text-white" />
+                            <Menu className="w-5 h-5 text-[var(--text-secondary)]" />
                         </button>
-                    </div>
-                )}
 
-                <main className="flex-1 w-full overflow-x-hidden">
+                        {/* Breadcrumb */}
+                        <nav aria-label="Breadcrumb" className="hidden md:flex items-center gap-2 text-sm text-[var(--text-muted)]">
+                            <span className="text-[var(--text-secondary)]">NexusPOS</span>
+                            <ChevronRight className="w-3.5 h-3.5" />
+                            <span className="text-[var(--text-primary)] font-medium capitalize">{pathname.split('/').pop()?.replace(/-/g, ' ') || 'Dashboard'}</span>
+                        </nav>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                        {/* Restaurant indicator */}
+                        {restaurant?.name && (
+                            <Badge variant="outline" className="hidden md:inline-flex h-9 gap-2 border-[var(--border)] text-[var(--text-secondary)] bg-[var(--surface-raised)] px-3">
+                                <Store className="w-3.5 h-3.5 text-brand" />
+                                <span className="max-w-[160px] truncate">{restaurant.name}</span>
+                            </Badge>
+                        )}
+
+                        {/* Notifications */}
+                        <DropdownMenu>
+                            <DropdownMenuTrigger
+                                className="relative w-9 h-9 flex items-center justify-center rounded-lg hover:bg-[var(--surface-hover)] transition-colors cursor-pointer"
+                                aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`}
+                            >
+                                <Bell className="w-5 h-5 text-[var(--text-secondary)]" />
+                                {unreadCount > 0 && (
+                                    <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-brand rounded-full ring-2 ring-[var(--background)]" />
+                                )}
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-80 bg-[var(--surface-raised)] border-[var(--border)]">
+                                <div className="px-4 py-3 border-b border-[var(--border)]">
+                                    <p className="text-sm font-semibold text-[var(--text-primary)]">Notifications</p>
+                                </div>
+                                <div className="px-4 py-6 text-center">
+                                    <LifeBuoy className="w-8 h-8 text-[var(--text-muted)] mx-auto mb-2" />
+                                    <p className="text-sm text-[var(--text-muted)]">No new notifications</p>
+                                </div>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+
+                        {/* Account */}
+                        <DropdownMenu>
+                            <DropdownMenuTrigger className="group flex h-10 items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-raised)] px-2 pr-3 transition-all hover:border-brand/30 hover:bg-[var(--surface-hover)]">
+                                <Avatar className="w-7 h-7 border border-[var(--border)]">
+                                    {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
+                                    <AvatarFallback className={cn("text-xs font-bold text-[var(--text-primary)]", rc.bg, rc.text)}>
+                                        {initial}
+                                    </AvatarFallback>
+                                </Avatar>
+                                <div className="hidden sm:block min-w-0 text-left">
+                                    <p className="max-w-[110px] truncate text-xs font-bold text-[var(--text-primary)]">{displayName}</p>
+                                    <p className={cn("text-[10px] font-semibold capitalize", rc.text)}>{effectiveRole}</p>
+                                </div>
+                                <ChevronDown className="hidden sm:block h-3.5 w-3.5 text-[var(--text-muted)] transition-transform group-data-[state=open]:rotate-180" />
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-80 overflow-hidden bg-[var(--surface-raised)] border-[var(--border)] p-0">
+                                <div className="p-4 bg-[var(--surface)] border-b border-[var(--border)]">
+                                    <div className="flex items-start gap-3">
+                                        <Avatar className="w-14 h-14 border border-[var(--border)]">
+                                            {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
+                                            <AvatarFallback className={cn("text-lg font-black text-[var(--text-primary)]", rc.bg, rc.text)}>
+                                                {initial}
+                                            </AvatarFallback>
+                                        </Avatar>
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-2">
+                                                <p className="truncate text-base font-black text-[var(--text-primary)]">{displayName}</p>
+                                                {isOwnerAccount && <BadgeCheck className="h-4 w-4 shrink-0 text-brand" />}
+                                            </div>
+                                            <p className="truncate text-xs text-[var(--text-muted)]">{accountEmail || 'No email on file'}</p>
+                                            <div className={cn("mt-2 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-bold uppercase tracking-wider", rc.bg, rc.text)}>
+                                                <span className={cn("h-1.5 w-1.5 rounded-full", rc.dot)} />
+                                                {isOwnerAccount ? 'Owner Account' : 'Staff Account'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2 p-3 border-b border-[var(--border)]">
+                                    <AccountInfoTile icon={Store} label="Restaurant" value={restaurant?.name || 'Not linked'} />
+                                    <AccountInfoTile icon={UserCog} label="Role" value={effectiveRole} />
+                                    <AccountInfoTile icon={Shield} label="Account" value={isOwnerAccount ? 'Owner' : 'Staff'} />
+                                    <AccountInfoTile icon={Bell} label="Alerts" value={unreadCount > 0 ? `${unreadCount} unread` : 'Clear'} />
+                                </div>
+
+                                <div className="p-2">
+                                    <DropdownMenuItem
+                                        className="text-[var(--text-secondary)] focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)] cursor-pointer"
+                                        onClick={() => router.push(primaryAccountAction.href)}
+                                    >
+                                        <PrimaryAccountIcon className="w-4 h-4 mr-2" />
+                                        {primaryAccountAction.label}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                        className="text-[var(--text-secondary)] focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)] cursor-pointer"
+                                        onClick={() => router.push(secondaryAccountAction.href)}
+                                    >
+                                        <SecondaryAccountIcon className="w-4 h-4 mr-2" />
+                                        {secondaryAccountAction.label}
+                                    </DropdownMenuItem>
+                                    {!isOwnerAccount && accountPhone && (
+                                        <div className="px-2 py-2 text-xs text-[var(--text-muted)]">
+                                            Phone: <span className="text-[var(--text-secondary)]">{accountPhone}</span>
+                                        </div>
+                                    )}
+                                </div>
+                                <DropdownMenuSeparator className="bg-[var(--border)]" />
+                                <div className="p-2">
+                                    <DropdownMenuItem
+                                        className="text-red-400 focus:bg-red-500/10 focus:text-red-300 cursor-pointer"
+                                        onClick={handleLogout}
+                                    >
+                                        <LogOut className="w-4 h-4 mr-2" />
+                                        Logout
+                                    </DropdownMenuItem>
+                                </div>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                    </div>
+                </header>
+
+                {/* Main */}
+                <main id="main-content" className="flex-1 w-full overflow-x-hidden">
                     <div className={cn(
-                        "w-full pb-20",
-                        ['/dashboard', '/dashboard/order-desk', '/dashboard/orders', '/dashboard/billing', '/dashboard/tables', '/dashboard/menu'].includes(pathname)
-                            ? "pt-0 px-0"
-                            : "pt-12 lg:pt-16 px-2 lg:px-4"
+                        "w-full",
+                        ['/dashboard/order-desk', '/dashboard/orders', '/dashboard/billing', '/dashboard/tables', '/dashboard/menu', '/dashboard/kitchen', '/dashboard/messages'].includes(pathname)
+                            ? "p-0"
+                            : "p-4 lg:p-6 max-w-[1400px] mx-auto"
                     )}>
-                        {children}
+                        <ErrorBoundary>
+                            <AuthGuard>
+                                {userRole && routePermissionMap[pathname] && !hasPermission(userRole, routePermissionMap[pathname])
+                                    ? <AccessDeniedPage />
+                                    : children
+                                }
+                            </AuthGuard>
+                        </ErrorBoundary>
                     </div>
                 </main>
             </div>
 
             <ChatWidget />
-        </PremiumLayout>
+        </div>
+    )
+}
+
+function AccountInfoTile({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value: string }) {
+    return (
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-raised)] p-2.5">
+            <div className="mb-1 flex items-center gap-1.5 text-[var(--text-muted)]">
+                <Icon className="h-3.5 w-3.5" />
+                <span className="text-[9px] font-bold uppercase tracking-wider">{label}</span>
+            </div>
+            <p className="truncate text-xs font-bold capitalize text-[var(--text-primary)]">{value}</p>
+        </div>
     )
 }

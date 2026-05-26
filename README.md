@@ -343,8 +343,8 @@ Create a `.env.local` file in the root directory with the following variables:
 # SUPABASE CONFIGURATION (Required)
 # ================================
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
+SUPABASE_SECRET_KEY=your-rotated-supabase-secret-key
 
 # ================================
 # APP CONFIGURATION

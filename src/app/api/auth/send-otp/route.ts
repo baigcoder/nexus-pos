@@ -1,133 +1,175 @@
 import { NextRequest, NextResponse } from 'next/server'
 import nodemailer from 'nodemailer'
-import { createClient } from '@supabase/supabase-js'
 import bcrypt from 'bcryptjs'
+import { createAdminClient } from '@/lib/supabase/admin'
+import {
+    secureRandomDigits,
+    sanitizeEmail,
+    getClientIp,
+    sanitizeErrorMessage,
+    createAuditEvent,
+    logAuthEvent,
+    getClientFingerprint,
+    checkRateLimit,
+    getRateLimitHeaders,
+    AUTH_CONSTANTS,
+} from '@/lib/auth'
 
-// Generate 6-digit OTP
-function generateOTP(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString()
+const { OTP_LENGTH, OTP_EXPIRY_MINUTES, OTP_MAX_ATTEMPTS, OTP_MAX_REQUESTS_PER_EMAIL, OTP_MAX_REQUESTS_PER_IP, OTP_RATE_LIMIT_WINDOW_MINUTES } = AUTH_CONSTANTS
+
+const OTP_RATE_CONFIG = {
+    maxRequests: OTP_MAX_REQUESTS_PER_EMAIL,
+    windowMs: OTP_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
+    lockoutDurationMs: OTP_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
 }
 
-// Rate limiting constants
-const MAX_OTP_REQUESTS_PER_EMAIL = 3
-const MAX_OTP_REQUESTS_PER_IP = 10
-const RATE_LIMIT_WINDOW_MINUTES = 15
+const IP_RATE_CONFIG = {
+    maxRequests: OTP_MAX_REQUESTS_PER_IP,
+    windowMs: OTP_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
+    lockoutDurationMs: OTP_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
+}
+
+function getSmtpConfig() {
+    const user = process.env.SMTP_USER || process.env.SMTP_EMAIL
+    const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD
+    if (!user || !pass) return null
+    return { user, pass }
+}
 
 export async function POST(request: NextRequest) {
     try {
-        // Initialize Supabase with service role
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-        const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+        const supabase = createAdminClient()
 
-        if (!supabaseUrl || !supabaseServiceKey) {
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
             return NextResponse.json(
-                { error: 'Server configuration error' },
-                { status: 500 }
+                { error: 'Invalid request body' },
+                { status: 400 }
             )
         }
 
-        const supabase = createClient(supabaseUrl, supabaseServiceKey)
-
-        const { email } = await request.json()
-        const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
-
+        const rawEmail = (body as Record<string, unknown>).email
+        const email = sanitizeEmail(rawEmail)
         if (!email) {
             return NextResponse.json(
-                { error: 'Email is required' },
+                { error: 'A valid email address is required' },
                 { status: 400 }
             )
         }
 
-        // Validate email format
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-        if (!emailRegex.test(email)) {
-            return NextResponse.json(
-                { error: 'Invalid email format' },
-                { status: 400 }
-            )
-        }
+        const clientIp = getClientIp(request)
+        const fingerprint = getClientFingerprint(request)
+        const emailLimitKey = `otp:email:${email}`
+        const ipLimitKey = `otp:ip:${clientIp}`
 
-        // Check rate limit by email
-        const { data: emailRateCheck } = await supabase.rpc('check_otp_rate_limit', {
-            p_identifier: email.toLowerCase(),
-            p_identifier_type: 'email',
-            p_max_requests: MAX_OTP_REQUESTS_PER_EMAIL,
-            p_window_minutes: RATE_LIMIT_WINDOW_MINUTES
-        })
-
-        if (emailRateCheck && emailRateCheck.length > 0 && !emailRateCheck[0].allowed) {
+        const emailRateResult = checkRateLimit(emailLimitKey, OTP_RATE_CONFIG)
+        if (!emailRateResult.allowed) {
+            await logAuthEvent(createAuditEvent('rate_limit_exceeded', email, clientIp, { type: 'otp_email_limit' }))
             return NextResponse.json(
                 {
-                    error: `Too many OTP requests. Please try again in ${Math.ceil(emailRateCheck[0].retry_after_seconds / 60)} minutes.`,
-                    retryAfter: emailRateCheck[0].retry_after_seconds
+                    error: `Too many verification requests. Please try again in ${Math.ceil(emailRateResult.retryAfterMs / 60000)} minutes.`,
+                    retryAfter: Math.ceil(emailRateResult.retryAfterMs / 1000),
                 },
-                { status: 429 }
+                {
+                    status: 429,
+                    headers: getRateLimitHeaders(emailRateResult, OTP_RATE_CONFIG),
+                }
             )
         }
 
-        // Check rate limit by IP
-        const { data: ipRateCheck } = await supabase.rpc('check_otp_rate_limit', {
-            p_identifier: clientIp,
-            p_identifier_type: 'ip',
-            p_max_requests: MAX_OTP_REQUESTS_PER_IP,
-            p_window_minutes: RATE_LIMIT_WINDOW_MINUTES
-        })
-
-        if (ipRateCheck && ipRateCheck.length > 0 && !ipRateCheck[0].allowed) {
+        const ipRateResult = checkRateLimit(ipLimitKey, IP_RATE_CONFIG)
+        if (!ipRateResult.allowed) {
+            await logAuthEvent(createAuditEvent('rate_limit_exceeded', clientIp, clientIp, { type: 'otp_ip_limit' }))
             return NextResponse.json(
                 {
                     error: 'Too many requests from your network. Please try again later.',
-                    retryAfter: ipRateCheck[0].retry_after_seconds
+                    retryAfter: Math.ceil(ipRateResult.retryAfterMs / 1000),
+                },
+                {
+                    status: 429,
+                    headers: getRateLimitHeaders(ipRateResult, IP_RATE_CONFIG),
+                }
+            )
+        }
+
+        let dbRateCheckEmail: { data?: any; error?: any } | null = null
+        try {
+            dbRateCheckEmail = await supabase.rpc('check_otp_rate_limit', {
+                p_identifier: email,
+                p_identifier_type: 'email',
+                p_max_requests: OTP_MAX_REQUESTS_PER_EMAIL,
+                p_window_minutes: OTP_RATE_LIMIT_WINDOW_MINUTES,
+            })
+        } catch {
+            dbRateCheckEmail = null
+        }
+
+        if (dbRateCheckEmail?.data?.[0] && !dbRateCheckEmail.data[0].allowed) {
+            return NextResponse.json(
+                {
+                    error: `Too many verification requests. Please try again in ${Math.ceil(dbRateCheckEmail.data[0].retry_after_seconds / 60)} minutes.`,
+                    retryAfter: dbRateCheckEmail.data[0].retry_after_seconds,
                 },
                 { status: 429 }
             )
         }
 
-        // Generate OTP
-        const otp = generateOTP()
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+        const otp = secureRandomDigits(OTP_LENGTH)
+        const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000)
+        const otpHash = await bcrypt.hash(otp, 12)
 
-        // Hash OTP before storing (security improvement)
-        const otpHash = await bcrypt.hash(otp, 10)
-
-        // Delete any existing OTPs for this email
         await supabase
             .from('otp_codes')
             .delete()
-            .eq('email', email.toLowerCase())
+            .eq('email', email)
 
-        // Store new OTP (hashed)
         const { error: dbError } = await supabase
             .from('otp_codes')
             .insert({
-                email: email.toLowerCase(),
-                code: otpHash, // Store hashed OTP
+                email,
+                code: otpHash,
                 expires_at: expiresAt.toISOString(),
                 verified: false,
                 attempts: 0,
                 request_ip: clientIp,
+                fingerprint,
             })
 
         if (dbError) {
-            console.error('Database error:', dbError)
+            console.error('[SEND_OTP] Database insert error:', dbError.message)
             return NextResponse.json(
-                { error: 'Failed to generate verification code' },
+                { error: 'Failed to generate verification code. Please try again.' },
                 { status: 500 }
             )
         }
 
-        // Create transporter for sending email
+        await logAuthEvent(createAuditEvent('otp_sent', email, clientIp))
+
+        const smtpConfig = getSmtpConfig()
+        if (!smtpConfig) {
+            if (process.env.NODE_ENV !== 'production') {
+                return NextResponse.json({
+                    success: true,
+                    message: 'Verification code generated in development mode',
+                    devMode: true,
+                    remainingAttempts: emailRateResult.remainingRequests,
+                })
+            }
+            return NextResponse.json(
+                { error: 'Email service is not configured' },
+                { status: 503 }
+            )
+        }
+
         const transporter = nodemailer.createTransport({
             service: 'gmail',
-            auth: {
-                user: process.env.SMTP_EMAIL,
-                pass: process.env.SMTP_PASSWORD,
-            },
+            auth: { user: smtpConfig.user, pass: smtpConfig.pass },
         })
 
-        // Send email
-        const mailOptions = {
-            from: `"Nexus POS" <${process.env.SMTP_EMAIL}>`,
+        await transporter.sendMail({
+            from: `"Nexus POS" <${smtpConfig.user}>`,
             to: email,
             subject: 'Your Nexus POS Verification Code',
             html: `
@@ -136,44 +178,37 @@ export async function POST(request: NextRequest) {
                         <h1 style="color: #f97316; margin: 0; font-size: 28px;">Nexus POS</h1>
                         <p style="color: #64748b; margin-top: 5px; font-size: 14px;">Restaurant Management System</p>
                     </div>
-                    
                     <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-radius: 16px; padding: 40px; text-align: center;">
                         <h2 style="color: #ffffff; margin: 0 0 10px; font-size: 20px;">Verification Code</h2>
                         <p style="color: #94a3b8; margin: 0 0 30px; font-size: 14px;">Enter this code to verify your email</p>
-                        
                         <div style="background: #1e293b; border-radius: 12px; padding: 24px; display: inline-block; border: 1px solid #334155;">
                             <span style="font-size: 36px; font-weight: bold; letter-spacing: 10px; color: #f97316; font-family: 'Courier New', monospace;">${otp}</span>
                         </div>
-                        
                         <p style="color: #64748b; margin-top: 30px; font-size: 13px;">
                             This code expires in <strong style="color: #f97316;">10 minutes</strong>.
                         </p>
                     </div>
-                    
                     <div style="margin-top: 30px; padding: 20px; background: #fef3c7; border-radius: 12px; border-left: 4px solid #f59e0b;">
                         <p style="color: #92400e; font-size: 13px; margin: 0;">
-                            <strong>⚠️ Security Notice:</strong> Never share this code with anyone. Nexus POS staff will never ask for your verification code.
+                            <strong>Security Notice:</strong> Never share this code with anyone. Nexus POS staff will never ask for your verification code.
                         </p>
                     </div>
-                    
                     <p style="color: #64748b; font-size: 12px; text-align: center; margin-top: 30px;">
                         If you didn't request this code, you can safely ignore this email.
                     </p>
                 </div>
             `,
-        }
-
-        await transporter.sendMail(mailOptions)
+        })
 
         return NextResponse.json({
             success: true,
             message: 'Verification code sent successfully',
-            remainingAttempts: emailRateCheck?.[0]?.remaining_requests ?? (MAX_OTP_REQUESTS_PER_EMAIL - 1)
+            remainingAttempts: emailRateResult.remainingRequests,
         })
     } catch (error: unknown) {
-        console.error('Send OTP error:', error)
+        console.error('[SEND_OTP] Error:', error instanceof Error ? error.message : 'Unknown error')
         return NextResponse.json(
-            { error: 'Failed to send verification code. Please try again.' },
+            { error: sanitizeErrorMessage(error) },
             { status: 500 }
         )
     }

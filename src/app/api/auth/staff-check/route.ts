@@ -1,49 +1,85 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createAdminClient } from '@/lib/supabase/admin'
+import {
+    sanitizeEmail,
+    getClientIp,
+    sanitizeErrorMessage,
+    createAuditEvent,
+    logAuthEvent,
+    checkRateLimit,
+    getRateLimitHeaders,
+    AUTH_CONSTANTS,
+} from '@/lib/auth'
 
-// Create admin client lazily (not at module level to avoid build-time errors)
-function getAdminClient() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-    if (!url || !key) {
-        throw new Error('Supabase configuration missing')
-    }
-    return createClient(url, key)
+const CHECK_RATE_CONFIG = {
+    maxRequests: 10,
+    windowMs: 15 * 60 * 1000,
 }
 
-/**
- * Check if a staff member exists by email
- * Returns staff info needed for login UI (needs_setup flag)
- */
 export async function POST(request: NextRequest) {
     try {
-        const { email } = await request.json()
+        const supabase = createAdminClient()
 
-        if (!email) {
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
             return NextResponse.json(
-                { success: false, error: 'Email is required' },
+                { success: false, error: 'Invalid request body' },
                 { status: 400 }
             )
         }
 
-        const supabaseAdmin = getAdminClient()
+        const { email: rawEmail } = body as Record<string, unknown>
+        const email = sanitizeEmail(rawEmail)
 
-        // Find staff by email (uses admin client to bypass RLS)
-        const { data: staff, error: staffError } = await supabaseAdmin
+        if (!email) {
+            return NextResponse.json(
+                { success: false, error: 'A valid email address is required' },
+                { status: 400 }
+            )
+        }
+
+        const clientIp = getClientIp(request)
+
+        const rateResult = checkRateLimit(`staff_check:${clientIp}`, CHECK_RATE_CONFIG)
+        if (!rateResult.allowed) {
+            return NextResponse.json(
+                { success: false, error: 'Too many requests. Please try again later.' },
+                { status: 429, headers: getRateLimitHeaders(rateResult, CHECK_RATE_CONFIG) }
+            )
+        }
+
+        let { data: staff, error: staffError } = await supabase
             .from('staff')
-            .select('id, name, email, role, needs_setup, restaurants(name, slug)')
-            .eq('email', email.toLowerCase().trim())
-            .eq('is_active', true)
-            .single()
+            .select('id, name, email, role, is_active, temp_pin, pin')
+            .eq('email', email)
+            .maybeSingle()
 
-        if (staffError || !staff) {
+        if (!staff && !staffError) {
+            const result = await supabase
+                .from('staff')
+                .select('id, name, email, role, is_active, temp_pin, pin')
+                .ilike('email', email)
+                .maybeSingle()
+            staff = result.data
+        }
+
+        if (!staff || staff.is_active === false) {
             return NextResponse.json(
                 { success: false, error: 'No active staff account found with this email' },
                 { status: 404 }
             )
         }
 
-        // Return staff info (without sensitive data)
+        const needsSetup = !!staff.temp_pin && !staff.pin
+        const pinLength = needsSetup ? AUTH_CONSTANTS.TEMP_PIN_LENGTH : AUTH_CONSTANTS.PIN_LENGTH
+
+        await logAuthEvent(createAuditEvent('login_success', email, clientIp, {
+            action: 'staff_check',
+            needsSetup,
+        }))
+
         return NextResponse.json({
             success: true,
             staff: {
@@ -51,15 +87,17 @@ export async function POST(request: NextRequest) {
                 name: staff.name,
                 email: staff.email,
                 role: staff.role,
-                needs_setup: staff.needs_setup,
-                restaurant: staff.restaurants,
-            }
+                needs_setup: needsSetup,
+                pin_length: pinLength,
+            },
+            message: needsSetup
+                ? 'First-time login: Enter 6-digit temporary PIN from your email'
+                : 'Enter your 4-digit permanent PIN',
         })
-
-    } catch (error) {
-        console.error('Staff check error:', error)
+    } catch (error: unknown) {
+        console.error('[STAFF_CHECK] Error:', error instanceof Error ? error.message : 'Unknown error')
         return NextResponse.json(
-            { success: false, error: 'An unexpected error occurred' },
+            { success: false, error: sanitizeErrorMessage(error) },
             { status: 500 }
         )
     }

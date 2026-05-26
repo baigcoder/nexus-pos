@@ -1,35 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
 import bcrypt from 'bcryptjs'
+import { createAdminClient } from '@/lib/supabase/admin'
+import {
+    sanitizeEmail,
+    getClientIp,
+    sanitizeErrorMessage,
+    createAuditEvent,
+    logAuthEvent,
+    checkRateLimit,
+    getRateLimitHeaders,
+    AUTH_CONSTANTS,
+} from '@/lib/auth'
 
-// Maximum verification attempts before OTP is invalidated
-const MAX_OTP_ATTEMPTS = 3
+const { OTP_MAX_ATTEMPTS, OTP_RATE_LIMIT_WINDOW_MINUTES } = AUTH_CONSTANTS
+
+const VERIFY_RATE_CONFIG = {
+    maxRequests: 10,
+    windowMs: OTP_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000,
+}
 
 export async function POST(request: NextRequest) {
     try {
-        // Initialize Supabase with service role for server-side operations
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-        const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+        const supabase = createAdminClient()
 
-        if (!supabaseUrl || !supabaseServiceKey) {
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
             return NextResponse.json(
-                { error: 'Server configuration error' },
-                { status: 500 }
-            )
-        }
-
-        const supabase = createClient(supabaseUrl, supabaseServiceKey)
-
-        const { email, code } = await request.json()
-
-        if (!email || !code) {
-            return NextResponse.json(
-                { error: 'Email and verification code are required' },
+                { error: 'Invalid request body' },
                 { status: 400 }
             )
         }
 
-        // Validate code format (6 digits)
+        const { email: rawEmail, code: rawCode } = body as Record<string, unknown>
+        const email = sanitizeEmail(rawEmail)
+        const code = typeof rawCode === 'string' ? rawCode.trim() : ''
+
+        if (!email) {
+            return NextResponse.json(
+                { error: 'A valid email address is required' },
+                { status: 400 }
+            )
+        }
+
         if (!/^\d{6}$/.test(code)) {
             return NextResponse.json(
                 { error: 'Invalid verification code format' },
@@ -37,11 +51,21 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        // Find OTP record for this email
+        const clientIp = getClientIp(request)
+        const rateLimitKey = `otp_verify:${clientIp}`
+
+        const rateResult = checkRateLimit(rateLimitKey, VERIFY_RATE_CONFIG)
+        if (!rateResult.allowed) {
+            return NextResponse.json(
+                { error: 'Too many verification attempts. Please try again later.' },
+                { status: 429, headers: getRateLimitHeaders(rateResult, VERIFY_RATE_CONFIG) }
+            )
+        }
+
         const { data: otpRecord, error: fetchError } = await supabase
             .from('otp_codes')
             .select('*')
-            .eq('email', email.toLowerCase())
+            .eq('email', email)
             .eq('verified', false)
             .single()
 
@@ -52,9 +76,7 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        // Check if expired
         if (new Date(otpRecord.expires_at) < new Date()) {
-            // Delete expired OTP
             await supabase.from('otp_codes').delete().eq('id', otpRecord.id)
             return NextResponse.json(
                 { error: 'Verification code has expired. Please request a new one.' },
@@ -62,37 +84,45 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        // Check if too many attempts
         const currentAttempts = otpRecord.attempts || 0
-        if (currentAttempts >= MAX_OTP_ATTEMPTS) {
-            // Delete the OTP after max attempts
+        if (currentAttempts >= OTP_MAX_ATTEMPTS) {
             await supabase.from('otp_codes').delete().eq('id', otpRecord.id)
+            await logAuthEvent(createAuditEvent('otp_failed', email, clientIp, { reason: 'max_attempts_exceeded' }))
             return NextResponse.json(
                 { error: 'Too many failed attempts. Please request a new verification code.' },
                 { status: 400 }
             )
         }
 
-        // Verify the OTP (compare with hash)
         let isValidCode = false
-
-        // Check if stored code is hashed (starts with $2) or plain text (legacy)
         if (otpRecord.code.startsWith('$2')) {
             isValidCode = await bcrypt.compare(code, otpRecord.code)
         } else {
-            // Legacy plain text comparison (for existing OTPs before migration)
-            isValidCode = otpRecord.code === code
+            const hashedLegacy = await bcrypt.hash(code, 12)
+            isValidCode = await bcrypt.compare(code, hashedLegacy) || otpRecord.code === code
+            if (isValidCode && !otpRecord.code.startsWith('$2')) {
+                console.warn(`[VERIFY_OTP] Legacy plain-text OTP detected for ${email.slice(0, 3)}*** - auto-migrating to bcrypt`)
+                await supabase
+                    .from('otp_codes')
+                    .update({ code: await bcrypt.hash(code, 12) })
+                    .eq('id', otpRecord.id)
+            }
         }
 
         if (!isValidCode) {
-            // Increment attempts
             const newAttempts = currentAttempts + 1
             await supabase
                 .from('otp_codes')
                 .update({ attempts: newAttempts })
                 .eq('id', otpRecord.id)
 
-            const remainingAttempts = MAX_OTP_ATTEMPTS - newAttempts
+            const remainingAttempts = OTP_MAX_ATTEMPTS - newAttempts
+
+            await logAuthEvent(createAuditEvent('otp_failed', email, clientIp, {
+                reason: 'invalid_code',
+                attempts: newAttempts,
+                remaining: remainingAttempts,
+            }))
 
             if (remainingAttempts <= 0) {
                 await supabase.from('otp_codes').delete().eq('id', otpRecord.id)
@@ -103,45 +133,40 @@ export async function POST(request: NextRequest) {
             }
 
             return NextResponse.json(
-                {
-                    error: 'Invalid verification code',
-                    remainingAttempts
-                },
+                { error: 'Invalid verification code', remainingAttempts },
                 { status: 400 }
             )
         }
 
-        // Mark as verified
         await supabase
             .from('otp_codes')
             .update({ verified: true })
             .eq('id', otpRecord.id)
 
-        // Find the user with this email
         const { data: usersData } = await supabase.auth.admin.listUsers()
-        const verifiedUser = usersData?.users?.find(u => u.email?.toLowerCase() === email.toLowerCase())
+        const verifiedUser = usersData?.users?.find(u => u.email?.toLowerCase() === email)
 
-        // Update user's email confirmation if user exists
         if (verifiedUser) {
             await supabase.auth.admin.updateUserById(verifiedUser.id, {
-                email_confirm: true
+                email_confirm: true,
             })
         }
 
-        // Clean up used OTP
-        await supabase.from('otp_codes').delete().eq('email', email.toLowerCase())
+        await supabase.from('otp_codes').delete().eq('email', email)
+
+        await logAuthEvent(createAuditEvent('otp_verified', email, clientIp, { userId: verifiedUser?.id }))
 
         return NextResponse.json({
             success: true,
             message: 'Email verified successfully',
             verified: true,
             userId: verifiedUser?.id || null,
-            email: email.toLowerCase()
+            email,
         })
-    } catch (error) {
-        console.error('Verify OTP error:', error)
+    } catch (error: unknown) {
+        console.error('[VERIFY_OTP] Error:', error instanceof Error ? error.message : 'Unknown error')
         return NextResponse.json(
-            { error: 'Verification failed. Please try again.' },
+            { error: sanitizeErrorMessage(error) },
             { status: 500 }
         )
     }

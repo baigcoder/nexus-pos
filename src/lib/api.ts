@@ -332,7 +332,7 @@ export async function updateTableStatus(
 
 export async function fetchOrders(
     restaurantId: string,
-    status?: string
+    status?: string | string[]
 ): Promise<ApiResponse<Order[]>> {
     try {
         const supabase = createClient()
@@ -341,13 +341,17 @@ export async function fetchOrders(
             .select(`
         *,
         table:tables(id, table_number),
-        items:order_items(*, menu_item:menu_items(name, price))
+        items:order_items(*, menu_item:menu_items(name))
       `)
             .eq('restaurant_id', restaurantId)
             .order('created_at', { ascending: false })
 
         if (status) {
-            query = query.eq('status', status)
+            if (Array.isArray(status)) {
+                query = query.in('status', status)
+            } else {
+                query = query.eq('status', status)
+            }
         }
 
         const { data, error } = await query

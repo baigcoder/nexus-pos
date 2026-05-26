@@ -1,16 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 // Create admin client
 function getAdminClient() {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+    return createAdminClient()
+}
 
-    if (!supabaseUrl || !supabaseServiceKey) {
-        throw new Error('Supabase configuration missing')
+function normalizeTrackingStatus(params: {
+    orderStatus: string | null | undefined
+    deliveryStatus?: string | null
+    hasDeliveryAssignment: boolean
+    hasRiderLocation: boolean
+}) {
+    const orderStatus = params.orderStatus?.toLowerCase()
+    const deliveryStatus = params.deliveryStatus?.toLowerCase()
+
+    if (deliveryStatus === 'delivered' || orderStatus === 'paid') {
+        return 'delivered'
     }
 
-    return createClient(supabaseUrl, supabaseServiceKey)
+    if (
+        deliveryStatus === 'dispatched' ||
+        deliveryStatus === 'out_for_delivery' ||
+        deliveryStatus === 'picked_up'
+    ) {
+        return 'dispatched'
+    }
+
+    if (orderStatus === 'served') {
+        return (params.hasDeliveryAssignment || params.hasRiderLocation) ? 'dispatched' : 'ready'
+    }
+
+    if (orderStatus === 'ready') {
+        return 'ready'
+    }
+
+    if (orderStatus === 'preparing') {
+        return 'preparing'
+    }
+
+    return 'pending'
 }
 
 // GET /api/track?order_number=1234 - Get tracking info for an order
@@ -124,9 +153,16 @@ export async function GET(request: NextRequest) {
             }
         }
 
+        const trackingStatus = normalizeTrackingStatus({
+            orderStatus: order.status,
+            deliveryStatus: assignment?.status,
+            hasDeliveryAssignment: !!assignment,
+            hasRiderLocation: !!riderLocation,
+        })
+
         // Parse delivery info from order notes if no assignment
-        let deliveryInfo = {
-            status: assignment?.status || order.status,
+        const deliveryInfo = {
+            status: trackingStatus,
             customer_name: assignment?.customer_name || '',
             delivery_address: assignment?.delivery_address || '',
             destination: assignment ? {
@@ -151,7 +187,13 @@ export async function GET(request: NextRequest) {
         }
 
         // Restaurant info with default location if not set
-        const restaurant = order.restaurant as any
+        const restaurant = order.restaurant as {
+            name?: string
+            address?: string
+            phone?: string
+            latitude?: number
+            longitude?: number
+        } | null
         const restaurantInfo = {
             name: restaurant?.name || 'Restaurant',
             address: restaurant?.address || '',
@@ -166,7 +208,8 @@ export async function GET(request: NextRequest) {
             success: true,
             order: {
                 order_number: order.order_number,
-                status: order.status,
+                status: trackingStatus,
+                raw_status: order.status,
                 total: order.total,
                 created_at: order.created_at,
             },

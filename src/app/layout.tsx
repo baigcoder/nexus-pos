@@ -1,24 +1,11 @@
 import type { Metadata } from 'next'
-import { Inter, Outfit } from 'next/font/google'
 import { Providers } from '@/components/providers'
 import './globals.css'
 
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-  display: 'swap',
-})
-
-const outfit = Outfit({
-  subsets: ['latin'],
-  variable: '--font-outfit',
-  display: 'swap',
-})
-
 export const metadata: Metadata = {
-  title: 'OrderFlow - Restaurant Order Management',
-  description: 'Modern restaurant order management system with real-time kitchen display, waiter tablets, and customer QR ordering.',
-  keywords: ['restaurant', 'order management', 'kitchen display', 'waiter', 'POS'],
+  title: 'NexusPOS - Industrial-Grade Restaurant Management',
+  description: 'The complete restaurant operating system. Real-time KDS, QR ordering, multi-location management, and intelligent analytics built for scale.',
+  keywords: ['restaurant POS', 'kitchen display system', 'restaurant management', 'QR ordering', 'food delivery', 'NexusPOS'],
 }
 
 export default function RootLayout({
@@ -27,8 +14,8 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" className={`${inter.variable} ${outfit.variable}`}>
-      <body className="antialiased">
+    <html lang="en" className="font-sans" suppressHydrationWarning>
+      <body className="antialiased" suppressHydrationWarning>
         <Providers>
           {children}
         </Providers>

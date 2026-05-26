@@ -4,477 +4,538 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-    Search,
-    Clock,
-    CheckCircle2,
-    XCircle,
-    ChefHat,
-    Utensils,
-    DollarSign,
-    Eye,
-    X,
-    Printer,
-    ArrowRight,
-    ArrowUpRight,
-    MapPin,
-    Calendar,
-    RefreshCw,
-    Volume2
+  Search, Clock, CheckCircle2, XCircle, ChefHat, Utensils,
+  DollarSign, Eye, X, Printer, ArrowRight, MapPin,
+  LayoutList, LayoutGrid, RefreshCw, Loader2
 } from 'lucide-react'
-import { Card, Button, Badge, SearchInput, Modal, StatCard } from '@/components/ui/common'
 import { cn } from '@/lib/utils'
 import { useAllOrders } from '@/hooks/useRealtimeOrders'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/toast'
 import type { Order, OrderStatus } from '@/types'
 
-const statusConfig: Record<OrderStatus, { label: string; variant: 'error' | 'warning' | 'success' | 'default' | 'neutral'; icon: any }> = {
-    pending: { label: 'Pending', variant: 'error', icon: Clock },
-    preparing: { label: 'Preparing', variant: 'warning', icon: ChefHat },
-    ready: { label: 'Ready', variant: 'success', icon: CheckCircle2 },
-    served: { label: 'Served', variant: 'default', icon: Utensils },
-    paid: { label: 'Paid', variant: 'success', icon: DollarSign },
-    cancelled: { label: 'Cancelled', variant: 'neutral', icon: XCircle },
+const statusConfig: Record<OrderStatus, { label: string; color: string; bg: string; border: string; dot: string; icon: React.ElementType }> = {
+  pending:  { label: 'Pending',  color: 'text-rose-500',   bg: 'bg-rose-500/10',   border: 'border-rose-500/20',   dot: 'bg-rose-500',   icon: Clock },
+  preparing: { label: 'Preparing', color: 'text-amber-500',   bg: 'bg-amber-500/10',   border: 'border-amber-500/20',   dot: 'bg-amber-500',   icon: ChefHat },
+  ready:   { label: 'Ready',   color: 'text-emerald-500',  bg: 'bg-emerald-500/10',  border: 'border-emerald-500/20',  dot: 'bg-emerald-500',  icon: CheckCircle2 },
+  served:  { label: 'Served',  color: 'text-blue-500',   bg: 'bg-blue-500/10',   border: 'border-blue-500/20',   dot: 'bg-blue-500',   icon: Utensils },
+  paid:   { label: 'Paid',   color: 'text-brand',     bg: 'bg-brand-subtle',   border: 'border-brand/20',     dot: 'bg-brand',     icon: DollarSign },
+  cancelled: { label: 'Cancelled', color: 'text-[var(--text-muted)]', bg: 'bg-[var(--surface-active)]', border: 'border-[var(--border)]', dot: 'bg-[var(--text-muted)]', icon: XCircle },
 }
 
+const kanbanStatuses: OrderStatus[] = ['pending', 'preparing', 'ready', 'served']
+
 export default function OrdersPage() {
-    const { orders: realtimeOrders, isLoading, refresh } = useAllOrders()
-    const { success, error: showError } = useToast()
-    const [searchQuery, setSearchQuery] = useState('')
-    const [statusFilter, setStatusFilter] = useState<OrderStatus | 'all'>('all')
-    const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
-    const [soundEnabled, setSoundEnabled] = useState(true)
+  const { orders: realtimeOrders, isLoading, refresh } = useAllOrders()
+  const { success, error: showError } = useToast()
+  const [searchQuery, setSearchQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<OrderStatus | 'all'>('all')
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
+  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list')
 
-    // Play sound when new order arrives
-    useEffect(() => {
-        if (soundEnabled && realtimeOrders.length > 0) {
-            // Sound notification logic can be added here
-        }
-    }, [realtimeOrders.length, soundEnabled])
+  const filteredOrders = realtimeOrders.filter(order => {
+    const matchesSearch = order.order_number?.toString().includes(searchQuery) ||
+      order.table?.table_number?.toLowerCase().includes(searchQuery.toLowerCase())
+    const matchesStatus = statusFilter === 'all' || order.status === statusFilter
+    return matchesSearch && matchesStatus
+  })
 
-    const filteredOrders = realtimeOrders.filter(order => {
-        const matchesSearch = order.order_number?.toString().includes(searchQuery) ||
-            order.table?.table_number?.toLowerCase().includes(searchQuery.toLowerCase())
-        const matchesStatus = statusFilter === 'all' || order.status === statusFilter
-        return matchesSearch && matchesStatus
-    })
+  const getTimeAgo = (date: string) => {
+    const mins = Math.floor((Date.now() - new Date(date).getTime()) / 60000)
+    if (mins < 1) return 'Just now'
+    if (mins < 60) return `${mins}m ago`
+    return `${Math.floor(mins / 60)}h ${mins % 60}m ago`
+  }
 
-    const getTimeAgo = (date: string) => {
-        const mins = Math.floor((Date.now() - new Date(date).getTime()) / 60000)
-        if (mins < 1) return 'Just now'
-        if (mins < 60) return `${mins}m ago`
-        return `${Math.floor(mins / 60)}h ${mins % 60}m ago`
+  const updateOrderStatus = async (orderId: string, newStatus: OrderStatus) => {
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('orders')
+      .update({ status: newStatus })
+      .eq('id', orderId)
+
+    if (error) {
+      showError('Error', 'Failed to update order status')
+    } else {
+      success('Updated', `Order status changed to ${newStatus}`)
+      setSelectedOrder(null)
+      refresh()
     }
+  }
 
-    // Update order status
-    const updateOrderStatus = async (orderId: string, newStatus: OrderStatus) => {
-        const supabase = createClient()
-        const { error } = await supabase
-            .from('orders')
-            .update({ status: newStatus })
-            .eq('id', orderId)
+  const stats = [
+    { label: 'Total', value: realtimeOrders.length, icon: Utensils },
+    { label: 'Active', value: realtimeOrders.filter(o => ['pending', 'preparing', 'ready'].includes(o.status)).length, icon: Clock },
+    { label: 'Revenue', value: `Rs. ${(realtimeOrders.reduce((sum, o) => sum + (o.total || 0), 0) / 1000).toFixed(1)}K`, icon: DollarSign },
+  ]
 
-        if (error) {
-            showError('Error', 'Failed to update order status')
-        } else {
-            success('Updated', `Order status changed to ${newStatus}`)
-            setSelectedOrder(null)
-        }
-    }
+  return (
+    <div className="min-h-screen bg-[var(--background)]">
+      <div className="p-4 lg:p-6 max-w-7xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-3 mb-3">
+              <span className="px-3 py-1 rounded-full bg-brand-subtle border border-brand/20 text-[10px] font-bold text-brand uppercase tracking-wider">
+                Order Hub
+              </span>
+              <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Live Sync</span>
+            </div>
+            <h1 className="text-3xl font-bold text-[var(--text-primary)] tracking-tight">
+              Order <span className="text-brand">History</span>
+            </h1>
+            <p className="text-sm text-[var(--text-muted)] mt-1">
+              Managing <span className="text-[var(--text-primary)] font-semibold">{realtimeOrders.length} orders</span> across the restaurant.
+            </p>
+          </div>
 
-    const statsData = [
-        { label: 'Total Orders', value: realtimeOrders.length.toString(), icon: Utensils, change: 0 },
-        { label: 'Active Orders', value: realtimeOrders.filter(o => ['pending', 'preparing', 'ready'].includes(o.status)).length.toString(), icon: Clock, change: 12 },
-        { label: 'Today\'s Revenue', value: `Rs. ${(realtimeOrders.reduce((sum, o) => sum + (o.total || 0), 0) / 1000).toFixed(1)}K`, icon: DollarSign, change: 8.5 },
-    ]
+          <div className="flex items-center gap-3">
+            <button
+              onClick={refresh}
+              disabled={isLoading}
+              className="h-10 px-4 rounded-lg bg-[var(--surface-raised)] border border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-all text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+            >
+              <RefreshCw className={cn("w-4 h-4", isLoading && "animate-spin")} />
+              Refresh
+            </button>
 
-    const container = {
-        hidden: { opacity: 0 },
-        show: { opacity: 1, transition: { staggerChildren: 0.1 } }
-    }
+            <Link
+              href="/dashboard/kitchen"
+              className="h-10 px-4 rounded-lg bg-brand hover:bg-brand-hover text-[var(--text-primary)] transition-all text-sm font-medium flex items-center gap-2 shadow-glow"
+            >
+              <ChefHat className="w-4 h-4" />
+              Kitchen
+            </Link>
+          </div>
+        </div>
 
-    const item = {
-        hidden: { opacity: 0, y: 20 },
-        show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 100 } }
-    }
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-4">
+          {stats.map((stat, idx) => (
+            <motion.div
+              key={stat.label}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: idx * 0.05 }}
+              className="p-4 rounded-xl bg-[var(--surface-raised)] border border-[var(--border)] flex items-center gap-3"
+            >
+              <div className="w-9 h-9 rounded-lg bg-brand-subtle flex items-center justify-center text-brand">
+                <stat.icon className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xl font-bold text-[var(--text-primary)]">{stat.value}</p>
+                <p className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">{stat.label}</p>
+              </div>
+            </motion.div>
+          ))}
+        </div>
 
-    return (
-        <div className="relative min-h-screen">
-            {/* Background Orbs */}
-            <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
-                <motion.div
-                    animate={{
-                        x: [0, 100, 0],
-                        y: [0, 50, 0],
-                        scale: [1, 1.2, 1]
-                    }}
-                    transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
-                    className="absolute -top-[10%] -left-[10%] w-[50%] h-[50%] bg-orange-600/10 blur-[120px] rounded-full"
-                />
-                <motion.div
-                    animate={{
-                        x: [0, -80, 0],
-                        y: [0, 100, 0],
-                        scale: [1, 1.3, 1]
-                    }}
-                    transition={{ duration: 30, repeat: Infinity, ease: "linear" }}
-                    className="absolute -bottom-[20%] -right-[10%] w-[60%] h-[60%] bg-purple-600/10 blur-[150px] rounded-full"
-                />
+        {/* Filters & View Toggle */}
+        <div className="flex flex-col xl:flex-row gap-4 items-center">
+          <div className="relative flex-1 w-full">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search order # or table..."
+              className="w-full h-10 bg-[var(--surface-raised)] border border-[var(--border)] rounded-lg pl-10 pr-4 text-sm outline-none focus:border-brand/50 focus:ring-1 focus:ring-brand/20 transition-all text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
+            />
+          </div>
+
+          <div className="flex gap-2 flex-wrap justify-center">
+            {(['all', 'pending', 'preparing', 'ready', 'served', 'paid'] as const).map(status => (
+              <button
+                key={status}
+                onClick={() => setStatusFilter(status)}
+                className={cn(
+                  'px-3 py-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all border',
+                  statusFilter === status
+                    ? 'bg-brand text-[var(--text-primary)] border-brand shadow-glow'
+                    : 'bg-[var(--surface-raised)] text-[var(--text-muted)] border-[var(--border)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
+                )}
+              >
+                {status === 'all' ? 'All' : statusConfig[status].label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex rounded-lg border border-[var(--border)] overflow-hidden">
+            <button
+              onClick={() => setViewMode('list')}
+              className={cn(
+                "px-3 py-2 text-sm transition-all flex items-center gap-1.5",
+                viewMode === 'list' ? "bg-brand text-[var(--text-primary)]" : "bg-[var(--surface-raised)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              )}
+              aria-label="List view"
+            >
+              <LayoutList className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setViewMode('kanban')}
+              className={cn(
+                "px-3 py-2 text-sm transition-all flex items-center gap-1.5",
+                viewMode === 'kanban' ? "bg-brand text-[var(--text-primary)]" : "bg-[var(--surface-raised)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              )}
+              aria-label="Kanban view"
+            >
+              <LayoutGrid className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        {isLoading ? (
+          <div className="flex justify-center py-20">
+            <Loader2 className="w-8 h-8 animate-spin text-brand" />
+          </div>
+        ) : viewMode === 'list' ? (
+          <ListView
+            orders={filteredOrders}
+            onSelect={setSelectedOrder}
+            getTimeAgo={getTimeAgo}
+          />
+        ) : (
+          <KanbanView
+            orders={filteredOrders}
+            onSelect={setSelectedOrder}
+            onStatusChange={updateOrderStatus}
+            getTimeAgo={getTimeAgo}
+          />
+        )}
+
+        {/* Order Detail Modal */}
+        <AnimatePresence>
+          {selectedOrder && (
+            <Modal
+              isOpen={!!selectedOrder}
+              onClose={() => setSelectedOrder(null)}
+              title={`Order #${selectedOrder.order_number}`}
+              size="lg"
+            >
+              <OrderDetail
+                order={selectedOrder}
+                onClose={() => setSelectedOrder(null)}
+                onStatusChange={updateOrderStatus}
+              />
+            </Modal>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  )
+}
+
+/* ============================================
+  LIST VIEW
+  ============================================ */
+
+function ListView({ orders, onSelect, getTimeAgo }: {
+  orders: Order[]
+  onSelect: (o: Order) => void
+  getTimeAgo: (d: string) => string
+}) {
+  return (
+    <div className="rounded-xl overflow-hidden bg-[var(--surface-raised)] border border-[var(--border)]">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="bg-[var(--surface)] border-b border-[var(--border)]">
+              <th className="px-5 py-4 text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Order</th>
+              <th className="px-5 py-4 text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Table</th>
+              <th className="px-5 py-4 text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Items</th>
+              <th className="px-5 py-4 text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Total</th>
+              <th className="px-5 py-4 text-center text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Status</th>
+              <th className="px-5 py-4 text-center text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Time</th>
+              <th className="px-5 py-4 text-right text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--border)]">
+            {orders.length > 0 ? orders.map((order) => {
+              const cfg = statusConfig[order.status]
+              return (
+                <tr
+                  key={order.id}
+                  className="group hover:bg-[var(--surface-hover)] transition-colors"
+                >
+                  <td className="px-5 py-4">
+                    <span className="text-sm font-semibold text-[var(--text-primary)]">#{order.order_number}</span>
+                  </td>
+                  <td className="px-5 py-4">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-md bg-[var(--surface)] border border-[var(--border)] flex items-center justify-center font-bold text-[11px] text-[var(--text-primary)]">
+                        {order.table?.table_number || '?'}
+                      </div>
+                      <span className="text-sm text-[var(--text-secondary)]">Table {order.table?.table_number || 'N/A'}</span>
+                    </div>
+                  </td>
+                  <td className="px-5 py-4">
+                    <span className="text-sm text-[var(--text-primary)]">{order.items?.length || 0}</span>
+                  </td>
+                  <td className="px-5 py-4">
+                    <span className="text-sm font-semibold text-[var(--text-primary)]">Rs. {order.total.toLocaleString()}</span>
+                  </td>
+                  <td className="px-5 py-4 text-center">
+                    <span className={cn(
+                      "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border",
+                      cfg.bg, cfg.color, cfg.border
+                    )}>
+                      <cfg.icon className="w-3 h-3" />
+                      {cfg.label}
+                    </span>
+                  </td>
+                  <td className="px-5 py-4 text-center">
+                    <span className="text-[11px] font-medium text-[var(--text-muted)]">{getTimeAgo(order.created_at)}</span>
+                  </td>
+                  <td className="px-5 py-4 text-right">
+                    <button
+                      onClick={() => onSelect(order)}
+                      className="h-8 px-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-all inline-flex items-center gap-2"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      View
+                    </button>
+                  </td>
+                </tr>
+              )
+            }) : (
+              <tr>
+                <td colSpan={7} className="px-5 py-16 text-center text-[var(--text-muted)] text-sm font-medium">
+                  No orders found matching your filters.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+/* ============================================
+  KANBAN VIEW
+  ============================================ */
+
+function KanbanView({ orders, onSelect, onStatusChange, getTimeAgo }: {
+  orders: Order[]
+  onSelect: (o: Order) => void
+  onStatusChange: (id: string, s: OrderStatus) => void
+  getTimeAgo: (d: string) => string
+}) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {kanbanStatuses.map(status => {
+        const cfg = statusConfig[status]
+        const statusOrders = orders.filter(o => o.status === status)
+        return (
+          <div key={status} className="flex flex-col gap-3">
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-2">
+                <div className={cn("w-2 h-2 rounded-full", cfg.dot)} />
+                <span className={cn("text-xs font-bold uppercase tracking-wider", cfg.color)}>{cfg.label}</span>
+              </div>
+              <span className="text-[11px] font-semibold text-[var(--text-muted)]">{statusOrders.length}</span>
             </div>
 
-            <motion.div
-                variants={container}
-                initial="hidden"
-                animate="show"
-                className="px-2 lg:px-4 space-y-10 pb-24 relative z-10"
-            >
-                {/* Header */}
-                <header className="flex flex-col lg:flex-row lg:items-end justify-between gap-8 pt-4">
-                    <div className="space-y-4">
-                        <div className="flex items-center gap-3">
-                            <motion.div
-                                initial={{ opacity: 0, scale: 0.8 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                className="px-4 py-1.5 bg-orange-600/10 border border-orange-600/20 rounded-full flex items-center gap-2"
-                            >
-                                <span className="w-1.5 h-1.5 bg-orange-600 rounded-full animate-pulse" />
-                                <span className="text-[10px] font-black text-orange-600 uppercase tracking-[0.2em]">Order Hub</span>
-                            </motion.div>
-                            <span className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em]">Live Sync Active</span>
-                        </div>
+            <div className="flex flex-col gap-2 min-h-[200px]">
+              {statusOrders.map(order => (
+                <motion.button
+                  key={order.id}
+                  layout
+                  onClick={() => onSelect(order)}
+                  className="text-left p-4 rounded-xl bg-[var(--surface-raised)] border border-[var(--border)] hover:border-[var(--border-strong)] transition-all group"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-bold text-[var(--text-primary)]">#{order.order_number}</span>
+                    <span className="text-[10px] font-medium text-[var(--text-muted)]">{getTimeAgo(order.created_at)}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)] mb-2">
+                    <MapPin className="w-3 h-3" />
+                    Table {order.table?.table_number || 'N/A'}
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-[var(--text-muted)]">{order.items?.length || 0} items</span>
+                    <span className="text-sm font-semibold text-brand">Rs. {order.total}</span>
+                  </div>
+                </motion.button>
+              ))}
 
-                        <motion.h1
-                            initial={{ opacity: 0, x: -20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            className="text-5xl lg:text-7xl font-black text-white tracking-tight leading-[0.9]"
-                        >
-                            ORDER <br />
-                            <span className="bg-gradient-to-r from-orange-500 via-amber-400 to-orange-600 bg-clip-text text-transparent italic">
-                                HISTORY
-                            </span>
-                        </motion.h1>
-
-                        <motion.p
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            transition={{ delay: 0.2 }}
-                            className="text-neutral-500 font-bold text-lg max-w-xl"
-                        >
-                            Managing <span className="text-white underline decoration-orange-600/50 underline-offset-4 font-black">{realtimeOrders.length} orders</span> across the restaurant ecosystem.
-                        </motion.p>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-4">
-                        <motion.button
-                            whileHover={{ scale: 1.05, y: -2 }}
-                            whileTap={{ scale: 0.95 }}
-                            className="h-14 px-8 bg-neutral-900/50 backdrop-blur-xl border border-neutral-800 rounded-2xl flex items-center gap-3 text-neutral-400 hover:text-white transition-all group shadow-xl"
-                        >
-                            <Printer className="w-5 h-5 group-hover:text-blue-500 transition-colors" />
-                            <span className="text-[10px] font-black uppercase tracking-widest">Print Report</span>
-                        </motion.button>
-
-                        <Link href="/dashboard/kitchen">
-                            <motion.button
-                                whileHover={{ scale: 1.05, y: -2 }}
-                                whileTap={{ scale: 0.95 }}
-                                className="group relative h-14 px-10 bg-orange-600 rounded-2xl flex items-center gap-3 overflow-hidden shadow-2xl shadow-orange-600/20"
-                            >
-                                <div className="absolute inset-0 bg-gradient-to-r from-orange-400/20 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
-                                <ChefHat className="w-5 h-5 text-white" />
-                                <span className="text-[10px] font-black text-white uppercase tracking-widest">Kitchen View</span>
-                                <ArrowRight className="w-4 h-4 text-white group-hover:translate-x-1 transition-transform" />
-                            </motion.button>
-                        </Link>
-                    </div>
-                </header>
-
-                {/* Metrics */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    {[
-                        { label: 'Total Orders', value: realtimeOrders.length.toString(), icon: Utensils, change: undefined, color: "from-orange-500/20 to-orange-600/5" },
-                        { label: 'Active Orders', value: realtimeOrders.filter(o => ['pending', 'preparing', 'ready'].includes(o.status)).length.toString(), icon: Clock, change: 12, color: "from-blue-500/20 to-blue-600/5" },
-                        { label: 'Daily Revenue', value: `Rs. ${(realtimeOrders.reduce((sum, o) => sum + (o.total || 0), 0) / 1000).toFixed(1)}K`, icon: DollarSign, change: 8.5, color: "from-emerald-500/20 to-emerald-600/5" },
-                    ].map((stat) => (
-                        <motion.div
-                            key={stat.label}
-                            variants={item}
-                            whileHover={{ y: -5, scale: 1.02 }}
-                            className="group"
-                        >
-                            <div className="relative h-full p-8 rounded-[2.5rem] bg-neutral-900/40 backdrop-blur-3xl border border-neutral-800/50 overflow-hidden transition-all duration-500 hover:border-orange-500/30 shadow-2xl">
-                                {/* Internal Glow */}
-                                <div className={cn("absolute -top-24 -right-24 w-48 h-48 bg-gradient-to-br blur-[80px] opacity-0 group-hover:opacity-100 transition-opacity duration-700", stat.color)} />
-
-                                <div className="relative z-10 flex flex-col h-full">
-                                    <div className="flex items-center justify-between mb-8">
-                                        <div className="w-12 h-12 rounded-2xl bg-black/40 border border-neutral-800/50 flex items-center justify-center text-neutral-400 group-hover:text-white group-hover:border-orange-500/50 transition-all duration-500 shadow-inner">
-                                            <stat.icon className="w-6 h-6" />
-                                        </div>
-                                        {stat.change !== undefined && (
-                                            <div className={cn(
-                                                "px-3 py-1 rounded-full text-[10px] font-black tracking-widest border transition-all duration-500",
-                                                stat.change >= 0
-                                                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500 group-hover:bg-emerald-500 group-hover:text-black"
-                                                    : "bg-rose-500/10 border-rose-500/20 text-rose-500 group-hover:bg-rose-500 group-hover:text-black"
-                                            )}>
-                                                {stat.change >= 0 ? '↑' : '↓'} {Math.abs(stat.change)}%
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <div className="mt-auto">
-                                        <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.2em] mb-2">{stat.label}</p>
-                                        <div className="flex items-baseline gap-2">
-                                            <h3 className="text-4xl font-black text-white tracking-tighter leading-none">{stat.value}</h3>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </motion.div>
-                    ))}
+              {statusOrders.length === 0 && (
+                <div className="py-8 text-center rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface-raised)]">
+                  <p className="text-[11px] font-medium text-[var(--text-muted)] uppercase tracking-wider">No orders</p>
                 </div>
+              )}
+            </div>
 
-                {/* Filters */}
-                <motion.div variants={item}>
-                    <div className="p-8 bg-neutral-900/40 backdrop-blur-3xl border border-neutral-800/50 rounded-[2.5rem] shadow-2xl relative overflow-hidden group">
-                        <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
+            {/* Quick advance actions */}
+            {status !== 'served' && (
+              <div className="flex gap-2">
+                {status === 'pending' && (
+                  <button
+                    onClick={() => statusOrders[0] && onStatusChange(statusOrders[0].id, 'preparing')}
+                    disabled={statusOrders.length === 0}
+                    className="flex-1 h-8 rounded-lg bg-amber-500/10 text-amber-500 text-[10px] font-bold uppercase tracking-wider border border-amber-500/20 hover:bg-amber-500 hover:text-[var(--text-primary)] transition-all disabled:opacity-30"
+                  >
+                    Start Prep
+                  </button>
+                )}
+                {status === 'preparing' && (
+                  <button
+                    onClick={() => statusOrders[0] && onStatusChange(statusOrders[0].id, 'ready')}
+                    disabled={statusOrders.length === 0}
+                    className="flex-1 h-8 rounded-lg bg-emerald-500/10 text-emerald-500 text-[10px] font-bold uppercase tracking-wider border border-emerald-500/20 hover:bg-emerald-500 hover:text-[var(--text-primary)] transition-all disabled:opacity-30"
+                  >
+                    Mark Ready
+                  </button>
+                )}
+                {status === 'ready' && (
+                  <button
+                    onClick={() => statusOrders[0] && onStatusChange(statusOrders[0].id, 'served')}
+                    disabled={statusOrders.length === 0}
+                    className="flex-1 h-8 rounded-lg bg-blue-500/10 text-blue-500 text-[10px] font-bold uppercase tracking-wider border border-blue-500/20 hover:bg-blue-500 hover:text-[var(--text-primary)] transition-all disabled:opacity-30"
+                  >
+                    Serve
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
-                        <div className="flex flex-col xl:flex-row gap-8 items-center relative z-10">
-                            <div className="flex-1 w-full relative group/input">
-                                <Search className="absolute left-6 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-600 group-focus-within/input:text-orange-600 transition-colors" />
-                                <input
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                    placeholder="SEARCH ORDER # OR TABLE..."
-                                    className="w-full h-16 bg-black/40 border border-neutral-800/50 rounded-2xl pl-16 pr-6 text-[10px] font-black uppercase tracking-[0.2em] outline-none focus:border-orange-500/50 focus:ring-8 focus:ring-orange-500/5 transition-all text-white placeholder:text-neutral-700 shadow-inner"
-                                />
-                            </div>
+/* ============================================
+  ORDER DETAIL
+  ============================================ */
 
-                            <div className="flex gap-3 flex-wrap justify-center bg-black/20 p-2 rounded-2xl border border-neutral-800/50">
-                                {(['all', 'pending', 'preparing', 'ready', 'served', 'paid'] as const).map(status => (
-                                    <motion.button
-                                        key={status}
-                                        whileHover={{ scale: 1.05 }}
-                                        whileTap={{ scale: 0.95 }}
-                                        onClick={() => setStatusFilter(status)}
-                                        className={cn(
-                                            'px-6 py-3 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all duration-500 border relative overflow-hidden group/btn',
-                                            statusFilter === status
-                                                ? 'bg-orange-600 text-white border-orange-500 shadow-lg shadow-orange-600/20'
-                                                : 'bg-transparent text-neutral-500 border-neutral-800/50 hover:border-neutral-700 hover:text-white'
-                                        )}
-                                    >
-                                        <span className="relative z-10">{status === 'all' ? 'All Orders' : statusConfig[status].label}</span>
-                                        {statusFilter === status && (
-                                            <motion.div
-                                                layoutId="activeFilter"
-                                                className="absolute inset-0 bg-gradient-to-r from-orange-400/20 to-transparent"
-                                            />
-                                        )}
-                                    </motion.button>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-                </motion.div>
+function OrderDetail({ order, onClose, onStatusChange }: {
+  order: Order
+  onClose: () => void
+  onStatusChange: (id: string, s: OrderStatus) => void
+}) {
+  const cfg = statusConfig[order.status]
+  const nextStatus: Record<OrderStatus, OrderStatus | null> = {
+    pending: 'preparing',
+    preparing: 'ready',
+    ready: 'served',
+    served: 'paid',
+    paid: null,
+    cancelled: null,
+  }
+  const ns = nextStatus[order.status]
 
-                {/* Orders List */}
-                <motion.div variants={item}>
-                    <div className="rounded-[3rem] overflow-hidden bg-neutral-900/40 backdrop-blur-3xl border border-neutral-800/50 shadow-2xl relative">
-                        <div className="overflow-x-auto custom-scrollbar">
-                            <table className="w-full text-left border-collapse">
-                                <thead>
-                                    <tr className="bg-black/60 border-b border-neutral-800/50">
-                                        <th className="px-10 py-8 text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em]">Payload ID</th>
-                                        <th className="px-10 py-8 text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em]">Station</th>
-                                        <th className="px-10 py-8 text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em]">Capacity</th>
-                                        <th className="px-10 py-8 text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em]">Revenue</th>
-                                        <th className="px-10 py-8 text-center text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em]">Lifecycle</th>
-                                        <th className="px-10 py-8 text-center text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em]">Duration</th>
-                                        <th className="px-10 py-8 text-right text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em]">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-neutral-800/30">
-                                    {filteredOrders.length > 0 ? filteredOrders.map((order) => {
-                                        const cfg = statusConfig[order.status]
-                                        return (
-                                            <motion.tr
-                                                key={order.id}
-                                                initial={{ opacity: 0 }}
-                                                animate={{ opacity: 1 }}
-                                                className="group hover:bg-orange-500/[0.02] transition-colors duration-500"
-                                            >
-                                                <td className="px-10 py-8">
-                                                    <span className="text-sm font-black text-neutral-400 group-hover:text-orange-500 transition-colors">#{order.order_number}</span>
-                                                </td>
-                                                <td className="px-10 py-8">
-                                                    <div className="flex items-center gap-4">
-                                                        <div className="w-10 h-10 rounded-xl bg-black/40 border border-neutral-800 flex items-center justify-center font-black text-[10px] group-hover:border-orange-500/50 transition-all shadow-inner">
-                                                            {order.table?.table_number || '?'}
-                                                        </div>
-                                                        <span className="font-black text-white text-sm tracking-tighter">Table {order.table?.table_number || 'N/A'}</span>
-                                                    </div>
-                                                </td>
-                                                <td className="px-10 py-8">
-                                                    <div className="flex flex-col">
-                                                        <span className="text-sm font-black text-white">{order.items?.length || 0}</span>
-                                                        <span className="text-[8px] font-black text-neutral-600 uppercase tracking-widest">Selected Items</span>
-                                                    </div>
-                                                </td>
-                                                <td className="px-10 py-8">
-                                                    <span className="text-base font-black text-white tracking-tighter">Rs. {order.total.toLocaleString()}</span>
-                                                </td>
-                                                <td className="px-10 py-8 text-center">
-                                                    <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-black/40 border border-neutral-800 group-hover:border-orange-500/30 transition-all">
-                                                        <span className={cn(
-                                                            "w-1.5 h-1.5 rounded-full",
-                                                            order.status === 'pending' ? 'bg-rose-500 animate-pulse' :
-                                                                order.status === 'preparing' ? 'bg-orange-500 animate-pulse' :
-                                                                    order.status === 'ready' ? 'bg-emerald-500 animate-pulse' :
-                                                                        'bg-neutral-600'
-                                                        )} />
-                                                        <span className={cn(
-                                                            "text-[9px] font-black uppercase tracking-[0.2em]",
-                                                            order.status === 'pending' ? 'text-rose-500' :
-                                                                order.status === 'preparing' ? 'text-orange-500' :
-                                                                    order.status === 'ready' ? 'text-emerald-500' :
-                                                                        'text-neutral-500'
-                                                        )}>
-                                                            {cfg.label}
-                                                        </span>
-                                                    </div>
-                                                </td>
-                                                <td className="px-10 py-8 text-center">
-                                                    <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest">{getTimeAgo(order.created_at)}</span>
-                                                </td>
-                                                <td className="px-10 py-8 text-right">
-                                                    <motion.button
-                                                        whileHover={{ scale: 1.05 }}
-                                                        whileTap={{ scale: 0.95 }}
-                                                        onClick={() => setSelectedOrder(order)}
-                                                        className="h-10 px-6 bg-neutral-900 border border-neutral-800 rounded-xl text-[9px] font-black text-neutral-500 uppercase tracking-widest hover:text-white hover:border-orange-500 hover:shadow-lg hover:shadow-orange-600/10 transition-all inline-flex items-center gap-3"
-                                                    >
-                                                        <Eye className="w-3.5 h-3.5" />
-                                                        Details
-                                                    </motion.button>
-                                                </td>
-                                            </motion.tr>
-                                        )
-                                    }) : (
-                                        <tr>
-                                            <td colSpan={7} className="px-10 py-32 text-center text-neutral-600 font-black uppercase tracking-[0.3em] italic">
-                                                No orders found in this lifecycle stage
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </motion.div>
-
-                {/* Order Detail Modal */}
-                <AnimatePresence>
-                    {selectedOrder && (
-                        <Modal
-                            isOpen={!!selectedOrder}
-                            onClose={() => setSelectedOrder(null)}
-                            title={`SETTLEMENT PAYLOAD: #${selectedOrder.order_number}`}
-                            size="lg"
-                        >
-                            <div className="space-y-10 py-6 bg-transparent relative overflow-hidden">
-                                {/* Brand Glow */}
-                                <div className="absolute top-0 right-0 w-64 h-64 bg-orange-600/5 blur-[100px] rounded-full pointer-events-none" />
-
-                                <div className="flex items-center justify-between pb-10 border-b border-neutral-800/50 relative z-10">
-                                    <div className="flex items-center gap-6">
-                                        <div className="w-16 h-16 rounded-[1.5rem] bg-neutral-900 border border-neutral-800 text-orange-500 flex items-center justify-center font-black text-2xl shadow-2xl shadow-orange-600/10 italic">
-                                            {selectedOrder.table?.table_number || '?'}
-                                        </div>
-                                        <div>
-                                            <span className="text-[10px] font-black text-neutral-600 uppercase tracking-[0.3em] block mb-1">STATION ASSIGNMENT</span>
-                                            <h3 className="text-3xl font-black text-white tracking-tighter">Table {selectedOrder.table?.table_number || 'N/A'}</h3>
-                                        </div>
-                                    </div>
-                                    <div className="flex flex-col items-end gap-2">
-                                        <div className="px-5 py-2 rounded-xl bg-orange-600/10 border border-orange-500/30">
-                                            <span className="text-[10px] font-black text-orange-500 uppercase tracking-widest">{statusConfig[selectedOrder.status].label}</span>
-                                        </div>
-                                        <span className="text-[9px] font-black text-neutral-700 uppercase tracking-widest">LIFECYCLE STATUS</span>
-                                    </div>
-                                </div>
-
-                                <div className="space-y-6 relative z-10">
-                                    <div className="flex items-center justify-between px-1">
-                                        <span className="text-[10px] font-black text-neutral-600 uppercase tracking-[0.3em]">ITEMIZED INVENTORY</span>
-                                        <div className="h-0.5 flex-1 mx-6 bg-gradient-to-r from-neutral-800 to-transparent opacity-30" />
-                                    </div>
-
-                                    <div className="space-y-4 max-h-[350px] overflow-y-auto pr-2 custom-scrollbar">
-                                        {(selectedOrder.items || []).map((item, i) => (
-                                            <motion.div
-                                                key={i}
-                                                initial={{ opacity: 0, x: -10 }}
-                                                animate={{ opacity: 1, x: 0 }}
-                                                transition={{ delay: i * 0.05 }}
-                                                className="flex justify-between items-center p-6 bg-neutral-900/40 border border-neutral-800/50 rounded-[1.5rem] group hover:border-orange-500/30 transition-all shadow-xl"
-                                            >
-                                                <div className="flex items-center gap-5">
-                                                    <div className="w-10 h-10 rounded-xl bg-black/40 border border-neutral-800 flex items-center justify-center shadow-inner">
-                                                        <span className="text-xs font-black text-orange-500">x{item.quantity}</span>
-                                                    </div>
-                                                    <div>
-                                                        <span className="font-black text-white text-sm tracking-tight block">{item.menu_item?.name || 'Item'}</span>
-                                                        <span className="text-[8px] font-black text-neutral-600 uppercase tracking-widest">Individual Serving</span>
-                                                    </div>
-                                                </div>
-                                                <div className="text-right">
-                                                    <span className="font-black text-white text-base tracking-tighter">Rs. {item.subtotal || 0}</span>
-                                                </div>
-                                            </motion.div>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <div className="p-8 bg-black/40 rounded-[2.5rem] border border-neutral-800/50 space-y-4 relative z-10 shadow-inner">
-                                    <div className="flex justify-between text-[10px] font-black text-neutral-600 uppercase tracking-widest">
-                                        <span>SUBTOTAL RECONCILIATION</span>
-                                        <span className="text-white">Rs. {selectedOrder.subtotal}</span>
-                                    </div>
-                                    <div className="flex justify-between text-[10px] font-black text-neutral-600 uppercase tracking-widest">
-                                        <span>TAXATION (16% GST)</span>
-                                        <span className="text-white font-black">Rs. {selectedOrder.tax}</span>
-                                    </div>
-                                    <div className="h-px bg-neutral-800/50 my-4" />
-                                    <div className="flex justify-between items-end">
-                                        <span className="text-[10px] font-black text-orange-500 uppercase tracking-[0.3em]">FINAL SETTLEMENT</span>
-                                        <span className="text-4xl font-black text-white tracking-tighter italic">Rs. {selectedOrder.total}</span>
-                                    </div>
-                                </div>
-
-                                <div className="flex gap-6 relative z-10 pt-4">
-                                    <motion.button
-                                        whileHover={{ scale: 1.02 }}
-                                        whileTap={{ scale: 0.98 }}
-                                        className="flex-1 h-20 rounded-[2rem] bg-neutral-900 text-neutral-500 font-black text-[10px] uppercase tracking-[0.2em] border border-neutral-800 hover:text-white transition-all shadow-xl"
-                                        onClick={() => setSelectedOrder(null)}
-                                    >
-                                        DISMISS
-                                    </motion.button>
-                                    <motion.button
-                                        whileHover={{ scale: 1.02, backgroundColor: '#ea580c' }}
-                                        whileTap={{ scale: 0.98 }}
-                                        className="flex-1 h-20 rounded-[2rem] bg-orange-600 text-white font-black text-[10px] uppercase tracking-[0.2em] shadow-2xl shadow-orange-600/20 flex items-center justify-center gap-3 border border-orange-400/20"
-                                    >
-                                        PRINT PAYLOAD <Printer className="w-5 h-5" />
-                                    </motion.button>
-                                </div>
-                            </div>
-                        </Modal>
-                    )}
-                </AnimatePresence>
-            </motion.div>
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-[var(--surface)] border border-[var(--border)] text-brand flex items-center justify-center font-bold text-lg">
+            {order.table?.table_number || '?'}
+          </div>
+          <div>
+            <p className="text-sm font-medium text-[var(--text-primary)]">Table {order.table?.table_number || 'N/A'}</p>
+            <span className={cn("text-[10px] font-bold uppercase tracking-wider", cfg.color)}>{cfg.label}</span>
+          </div>
         </div>
-    )
+        <button onClick={onClose} className="p-2 rounded-lg hover:bg-[var(--surface-hover)] text-[var(--text-muted)] transition-colors" aria-label="Close">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1 custom-scrollbar">
+        {(order.items || []).map((item, i) => (
+          <div
+            key={i}
+            className="flex justify-between items-center p-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg"
+          >
+            <div className="flex items-center gap-3">
+              <span className="w-7 h-7 rounded-md bg-brand-subtle flex items-center justify-center text-[11px] font-bold text-brand">
+                x{item.quantity}
+              </span>
+              <span className="text-sm text-[var(--text-primary)]">{item.menu_item?.name || 'Item'}</span>
+            </div>
+            <span className="text-sm font-medium text-[var(--text-primary)]">Rs. {item.subtotal || 0}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="p-4 bg-[var(--surface)] rounded-xl border border-[var(--border)] space-y-2">
+        <div className="flex justify-between text-sm text-[var(--text-muted)]">
+          <span>Subtotal</span>
+          <span className="text-[var(--text-primary)]">Rs. {order.subtotal}</span>
+        </div>
+        <div className="flex justify-between text-sm text-[var(--text-muted)]">
+          <span>Tax</span>
+          <span className="text-[var(--text-primary)]">Rs. {order.tax}</span>
+        </div>
+        <div className="h-px bg-[var(--border)] my-2" />
+        <div className="flex justify-between items-center">
+          <span className="text-sm font-bold text-brand">Total</span>
+          <span className="text-2xl font-bold text-[var(--text-primary)]">Rs. {order.total}</span>
+        </div>
+      </div>
+
+      <div className="flex gap-3">
+        <button
+          onClick={onClose}
+          className="flex-1 h-11 rounded-lg font-medium text-sm border border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-all"
+        >
+          Close
+        </button>
+        {ns && (
+          <button
+            onClick={() => onStatusChange(order.id, ns)}
+            className="flex-1 h-11 rounded-lg bg-brand hover:bg-brand-hover text-[var(--text-primary)] font-medium text-sm shadow-glow transition-all flex items-center justify-center gap-2"
+          >
+            Mark as {statusConfig[ns].label}
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        )}
+        {!ns && order.status === 'served' && (
+          <Link href={`/dashboard/billing?order=${order.id}`} className="flex-1">
+            <button className="w-full h-11 rounded-lg bg-brand hover:bg-brand-hover text-[var(--text-primary)] font-medium text-sm shadow-glow transition-all flex items-center justify-center gap-2">
+              Go to Billing
+              <DollarSign className="w-4 h-4" />
+            </button>
+          </Link>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ============================================
+  MODAL
+  ============================================ */
+
+function Modal({ isOpen, onClose, title, children, size = 'md' }: {
+  isOpen: boolean
+  onClose: () => void
+  title: string
+  children: React.ReactNode
+  size?: 'sm' | 'md' | 'lg' | 'xl'
+}) {
+  const sizes = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' }
+  if (!isOpen) return null
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-[var(--surface)]/60 backdrop-blur-sm" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className={cn(
+          "relative bg-[var(--surface-raised)] border border-[var(--border)] rounded-xl shadow-2xl w-full max-h-[90vh] flex flex-col overflow-hidden",
+          sizes[size]
+        )}
+      >
+        <div className="p-4 border-b border-[var(--border)] flex items-center justify-between">
+          <h2 className="text-base font-semibold text-[var(--text-primary)]">{title}</h2>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[var(--surface-hover)] text-[var(--text-muted)] transition-colors" aria-label="Close modal">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="p-5 overflow-y-auto">{children}</div>
+      </motion.div>
+    </div>
+  )
 }

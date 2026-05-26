@@ -2,20 +2,28 @@
 @plugin "daisyui";
 
 /* ===================================
-   OrderFlow Premium v7.0
-   Design System Foundation
+   NexusPOS Design System v8.0
+   Industrial-Grade Restaurant SaaS
    =================================== */
 
 @theme {
-  /* Brand Palette - Vibrant Orange (Appetizing & Energetic) */
-  --color-primary: #f97316;
-  --color-primary-dark: #ea580c;
-  --color-primary-light: #fdba74;
+  /* Brand Palette */
+  --color-brand: #f97316;
+  --color-brand-hover: #ea580c;
+  --color-brand-muted: #fdba74;
+  --color-brand-subtle: rgba(249, 115, 22, 0.1);
 
-  /* Secondary - Emerald (Growth/Success) */
-  --color-secondary: #10b981;
+  /* Semantic */
+  --color-success: #10b981;
+  --color-success-subtle: rgba(16, 185, 129, 0.1);
+  --color-warning: #f59e0b;
+  --color-warning-subtle: rgba(245, 158, 11, 0.1);
+  --color-error: #ef4444;
+  --color-error-subtle: rgba(239, 68, 68, 0.1);
+  --color-info: #3b82f6;
+  --color-info-subtle: rgba(59, 130, 246, 0.1);
 
-  /* Neutral Palette - True Gray (No Blue/Purple Undertones) */
+  /* Neutrals */
   --color-neutral-50: #fafafa;
   --color-neutral-100: #f5f5f5;
   --color-neutral-200: #e5e5e5;
@@ -27,76 +35,86 @@
   --color-neutral-800: #262626;
   --color-neutral-900: #171717;
   --color-neutral-950: #0a0a0a;
-  /* Pure Neutral */
-
-  /* Semantic Colors */
-  --color-success: #10b981;
-  --color-warning: #f59e0b;
-  --color-error: #ef4444;
-  --color-info: #3b82f6;
 
   /* Typography */
-  --font-sans: var(--font-inter), system-ui, sans-serif;
-  --font-display: var(--font-outfit), sans-serif;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  /* Premium Shadows */
-  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.06);
-  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.05);
-  --shadow-orange: 0 10px 40px -10px rgba(249, 115, 22, 0.4);
-  /* Glow effect */
+  /* Radius Scale */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.4), 0 2px 4px -2px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.5), 0 4px 6px -4px rgb(0 0 0 / 0.4);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.5), 0 8px 10px -6px rgb(0 0 0 / 0.4);
+  --shadow-glow: 0 0 20px rgba(249, 115, 22, 0.25);
+  --shadow-glow-lg: 0 0 40px rgba(249, 115, 22, 0.2);
+
+  /* Animation */
+  --animate-duration-fast: 150ms;
+  --animate-duration-normal: 250ms;
+  --animate-duration-slow: 350ms;
+  --animate-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
+
+/* ===================================
+   Dark-Only Semantic Tokens
+   =================================== */
 
 :root {
-  /* Light Mode */
-  --background: #ffffff;
-  --foreground: #0a0a0a;
+  --background: #030303;
+  --foreground: #fafafa;
 
-  --surface: #ffffff;
-  --surface-hover: #f5f5f5;
-  --surface-active: #e5e5e5;
+  --surface: #0a0a0a;
+  --surface-raised: #141414;
+  --surface-hover: #1a1a1a;
+  --surface-active: #262626;
 
-  --border: #e5e5e5;
-  --muted: #737373;
-  --muted-foreground: #a3a3a3;
+  --border: #1f1f1f;
+  --border-subtle: #141414;
+  --border-strong: #2a2a2a;
+
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-disabled: #52525b;
+
+  --ring: #f97316;
+  --ring-offset: #0a0a0a;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not(.light-mode) {
-    --background: #0a0a0a;
-    /* True Black/Neutral 950 */
-    --foreground: #fafafa;
+/* ===================================
+   Base Styles
+   =================================== */
 
-    --surface: #171717;
-    /* Neutral 900 */
-    --surface-hover: #262626;
-    /* Neutral 800 */
-    --surface-active: #404040;
-    /* Neutral 700 */
-
-    --border: #262626;
-    --muted: #a3a3a3;
-    --muted-foreground: #737373;
-  }
-}
-
-/* Base Overrides */
 body {
   background-color: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Selection */
+::selection {
+  background-color: rgba(249, 115, 22, 0.3);
+  color: #fff;
 }
 
 /* ===================================
-   Premium Utilities
+   Scrollbar
    =================================== */
 
-/* Custom Scrollbar - Slim & Sleek */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -104,89 +122,226 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: transparent;
+  background: var(--border-strong);
   border-radius: 9999px;
 }
 
-:hover::-webkit-scrollbar-thumb {
-  background: var(--border);
+::-webkit-scrollbar-thumb:hover {
+  background: var(--neutral-600);
 }
+
+/* ===================================
+   Typography Utilities
+   =================================== */
 
 .font-display {
   font-family: var(--font-display);
 }
 
-/* Glow Utilities */
-.shadow-glow {
-  box-shadow: var(--shadow-orange);
+.font-mono {
+  font-family: var(--font-mono);
 }
 
-/* Glassmorphism */
+/* Label - used for form labels, section headers */
+.label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+/* Stat Value - large metric numbers */
+.stat-value {
+  font-family: var(--font-display);
+  font-size: 1.875rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+/* Section Title */
+.section-title {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* Body text hierarchy */
+.text-body {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.text-body-sm {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* ===================================
+   Surface & Elevation
+   =================================== */
+
+.surface {
+  background-color: var(--surface);
+}
+
+.surface-raised {
+  background-color: var(--surface-raised);
+}
+
+.surface-hover:hover {
+  background-color: var(--surface-hover);
+}
+
+/* ===================================
+   Focus & Accessibility
+   =================================== */
+
+:focus-visible {
+  outline: none;
+  ring: 2px;
+  ring-color: var(--ring);
+  ring-offset: 2px;
+  ring-offset-color: var(--ring-offset);
+}
+
+/* Skip link */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: var(--brand);
+  color: white;
+  padding: 8px 16px;
+  z-index: 100;
+  transition: top 0.3s;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* ===================================
+   Glassmorphism
+   =================================== */
+
 .glass {
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(10, 10, 10, 0.7);
+  backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-/* DaisyUI Theme Overrides - Force Orange */
+.glass-strong {
+  background: rgba(10, 10, 10, 0.85);
+  backdrop-filter: blur(30px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ===================================
+   Animations
+   =================================== */
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+  20%, 40%, 60%, 80% { transform: translateX(4px); }
+}
+
+.animate-shake {
+  animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s var(--animate-ease-out) forwards;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.3s var(--animate-ease-out) forwards;
+}
+
+/* ===================================
+   Reduced Motion
+   =================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ===================================
+   DaisyUI Overrides
+   =================================== */
+
 :root,
 [data-theme] {
   --p: 24.6 95% 53.1%;
-  /* Orange HSL */
   --pc: 0 0% 100%;
-  /* White text on primary */
   --af: 24.6 95% 45%;
-  /* Darker orange for hover/active */
 }
 
-@layer utilities {
-  .animate-gradient {
-    background-size: 200% 200%;
-    animation: gradient 8s ease infinite;
-  }
+/* ===================================
+   shadcn/ui Theme Mapping
+   =================================== */
 
-  .shadow-glow {
-    box-shadow: 0 0 20px rgba(249, 115, 22, 0.3);
-  }
-
-  .text-glow {
-    text-shadow: 0 0 10px rgba(249, 115, 22, 0.5);
-  }
-
-  @keyframes gradient {
-    0% {
-      background-position: 0% 50%;
-    }
-
-    50% {
-      background-position: 100% 50%;
-    }
-
-    100% {
-      background-position: 0% 50%;
-    }
-  }
-
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 4px;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.1);
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
+@layer base {
+  :root {
+    --background: 0 0% 1.2%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 24.6 95% 53.1%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 12%;
+    --input: 0 0% 14.9%;
+    --ring: 24.6 95% 53.1%;
+    --radius: 0.75rem;
   }
 }
 
-.dark .glass {
-  background: rgba(10, 10, 10, 0.6);
-  backdrop-filter: blur(20px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
 }
