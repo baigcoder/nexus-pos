@@ -1,662 +1,323 @@
-# 🍽️ OrderFlow - Complete Restaurant POS & Management System
+# NexusPOS
 
-<div align="center">
+NexusPOS is a full-stack restaurant operating system for POS, kitchen display, QR ordering, delivery, staff operations, customer-facing screens, and AI-assisted restaurant analytics.
 
-![Next.js](https://img.shields.io/badge/Next.js-16.1.1-black?style=for-the-badge&logo=next.js)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?style=for-the-badge&logo=typescript)
-![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-green?style=for-the-badge&logo=supabase)
-![TailwindCSS](https://img.shields.io/badge/Tailwind-v4-38B2AC?style=for-the-badge&logo=tailwind-css)
-![React](https://img.shields.io/badge/React-19.2-61DAFB?style=for-the-badge&logo=react)
+Repository/package context:
 
-**A modern, full-featured restaurant management and POS system with real-time order tracking, kitchen display, QR code ordering, delivery management, and comprehensive analytics.**
+- Repository: `baigcoder/nexus-pos`
+- Package name: `orderflow`
+- Framework: Next.js 16 App Router, React 19, TypeScript, Tailwind CSS v4
+- Backend: Next.js route handlers with Supabase PostgreSQL
+- Deployment targets: Vercel or Docker
 
-[🚀 Live Demo](#deployment) • [📖 Documentation](#features) • [⚙️ Installation](#installation) • [🔧 Configuration](#environment-variables)
+## Current Status
 
----
+This README reflects the current `main` branch feature inventory. The app has moved beyond a basic POS into a multi-role restaurant management platform with real-time operational modules, AI endpoints, staff portals, display screens, Docker packaging, and Supabase migration scripts.
 
-### 🏗️ Development Status: ~60% Complete
+## Core Features
 
-</div>
+### Restaurant And POS Operations
 
----
+- Multi-restaurant setup with restaurant profile, branding, operating settings, and onboarding flow.
+- Role-aware dashboard experience for owners, managers, waiters, kitchen staff, cashiers, delivery staff, and riders.
+- Table management with table status updates, QR ordering setup, reservations, and waiter workflows.
+- Menu management with categories, image upload support, availability toggles, specials, ingredient tracking, and menu utilities.
+- Order flow for dine-in, takeaway, delivery, waiter ordering, kitchen routing, billing, and customer order status tracking.
+- Billing tools for payment processing, discounts, split-payment style workflows, cashier views, tips, and daily reports.
 
-## 📑 Table of Contents
+### Kitchen, Delivery, And Displays
 
-- [Features](#-features)
-- [Tech Stack](#️-tech-stack)
-- [Project Structure](#-project-structure)
-- [Installation](#-installation)
-- [Environment Variables](#-environment-variables)
-- [Database Setup](#-database-setup)
-- [Deployment](#-deployment)
-- [API Reference](#-api-reference)
-- [User Roles](#-user-roles)
-- [Routes](#-routes)
-- [Security](#-security)
-- [Integrations](#-integrations)
-- [Roadmap](#-roadmap)
-- [Contributing](#-contributing)
-- [License](#-license)
+- Kitchen dashboard and dedicated `/kitchen-display` screen for real-time order visibility.
+- Kitchen display migrations and templates for display screens and ad content.
+- Customer display routes under `/display/[slug]` with reusable display components.
+- Display manager module with ad-content management and screen content SQL updates.
+- Delivery assignment APIs, rider location tracking, delivery monitor dashboards, and Google Maps powered tracking components.
 
----
+### Staff, Messaging, And Access Control
 
-## ✨ Features
+- Staff invite, setup, PIN login, email login, OTP verification, forgot PIN, and PIN migration flows.
+- Staff portal at `/staff-portal` and staff messaging at `/staff-messages`.
+- Dashboard messaging at `/dashboard/messages` with Supabase realtime conversations, broadcast messages, call logs, and WebRTC audio/video call plumbing.
+- Permission gates, auth guards, access-denied UI, and centralized staff API helpers.
+- Staff shifts, bonuses, avatar, phone, tracking, RLS policy, and dashboard enhancement SQL scripts.
 
-### 🏪 **Multi-Restaurant Management**
-- Multi-restaurant support with owner authentication
-- Restaurant profile and branding customization
-- Operating hours and business settings
-- Staff management with role-based access control
-- Franchise management capabilities
+### Analytics, AI, And Reporting
 
-### 📋 **Menu Management**
-- Category-based menu organization
-- Rich menu item details with images and descriptions
-- Dietary tags (Vegetarian, Vegan, Spicy, Gluten-Free, Halal)
-- Daily specials and availability toggles
-- Price management and item customization
-- Ingredient-level inventory tracking
+- Analytics API and dashboard charts for revenue, orders, staff performance, and operational trends.
+- Report generation endpoint at `/api/reports/generate`.
+- OpenRouter-powered AI endpoints:
+  - `/api/ai/analyze-expense`
+  - `/api/ai/role-dashboard`
+- AI expense categorization with fallback classification when no AI key is configured.
+- Role dashboard analysis prompts for waiter, kitchen, cashier, and delivery contexts.
 
-### 🪑 **Table Management**
-- Visual table grid with capacity info
-- Real-time status tracking (Available, Occupied, Reserved, Billing)
-- QR code generation for each table
-- Quick status updates
-- Reservations system
+### Platform Integrations
 
-### 📝 **Order System**
-- **Waiter Interface**: Mobile-optimized tablet view for taking orders
-- **Customer Self-Ordering**: QR code scanning for direct menu access
-- **Order Desk**: Centralized order management hub
-- Order modifications and special instructions
-- Real-time order status updates
-- Priority order handling
+- Supabase Auth, PostgreSQL, Storage-compatible media flows, RLS policy scripts, and realtime channels.
+- OpenRouter-compatible AI models for restaurant analytics.
+- Twilio SMS/WhatsApp notification helpers.
+- Nodemailer email delivery helpers.
+- Web Push notification support.
+- Google Maps API for live delivery and fleet tracking.
+- Cloudinary unsigned upload configuration for menu and branding media.
+- Docker image and Compose service for production-style local/container deployment.
 
-### 👨‍🍳 **Kitchen Display System (KDS)**
-- Dark theme optimized for kitchen environments
-- Real-time order queue with countdown timers
-- Order status workflow (Pending → Preparing → Ready → Served)
-- Audio notifications for new orders
-- Fullscreen mode for dedicated displays
-- Multiple kitchen view layouts
+## Tech Stack
 
-### 💳 **Billing & Payments**
-- Bill generation with itemized breakdown
-- Discount application (percentage or fixed)
-- Multiple payment methods (Cash, Card, Mobile)
-- Change calculation for cash payments
-- Split bill functionality
-- Cashier-dedicated interface
+| Area | Technology |
+| --- | --- |
+| App framework | Next.js 16 App Router |
+| UI runtime | React 19 |
+| Language | TypeScript |
+| Styling | Tailwind CSS v4, DaisyUI, shadcn-style UI primitives |
+| Database/Auth | Supabase PostgreSQL and Supabase Auth |
+| State | Zustand |
+| Charts | Recharts |
+| Animation | Framer Motion |
+| Icons | Lucide React |
+| AI | OpenRouter-compatible chat completions |
+| Maps | Google Maps JavaScript API |
+| Messaging | Supabase Realtime, WebRTC helpers |
+| Notifications | Twilio, Nodemailer, Web Push, Sonner, React Hot Toast |
+| Deployment | Vercel, Docker, Docker Compose |
 
-### 📊 **Analytics & Reports**
-- Revenue and order statistics
-- Weekly/monthly revenue charts
-- Hourly order distribution
-- Top selling items tracking
-- Performance trends and comparisons
-- Staff performance metrics
-- Expense tracking
-- Comprehensive reporting dashboard
+## Application Routes
 
-### 🚚 **Delivery Management**
-- Delivery order tracking
-- Rider/delivery boy management
-- GPS tracking integration (Google Maps)
-- Delivery status monitoring
-- Customer location tracking
+### Public And Onboarding
 
-### 👥 **Staff Management**
-- Role-based access (Owner, Manager, Waiter, Kitchen, Cashier)
-- PIN-based quick login system
-- Shift management
-- Staff performance tracking
-- Tips management
+| Route | Purpose |
+| --- | --- |
+| `/` | NexusPOS landing page |
+| `/login` | Owner/user login |
+| `/register` | Registration |
+| `/setup` | Restaurant setup wizard |
+| `/verify-otp` | OTP verification |
+| `/staff-login` | Staff login |
+| `/staff-setup` | Staff onboarding/setup |
+| `/screen-login` | Display/screen login |
+| `/track` | Order tracking |
+| `/book` | Booking/reservation entry |
+| `/embed` | Embeddable widget surface |
+| `/trial-started` | Trial-start confirmation |
 
-### 📱 **Customer Experience**
-- QR code menu access
-- Real-time order tracking
-- Order confirmation with estimated time
-- Call waiter functionality
-- Loyalty program
-- Feedback collection
+### Operational Screens
 
-### 🔔 **Notifications**
-- Push notifications (Web Push)
-- SMS notifications (Twilio)
-- Email notifications (Nodemailer)
-- Real-time alerts
+| Route | Purpose |
+| --- | --- |
+| `/dashboard` | Main role-aware dashboard |
+| `/dashboard/analytics` | Analytics dashboard |
+| `/dashboard/billing` | Billing and payment workflows |
+| `/dashboard/cashier` | Cashier interface |
+| `/dashboard/delivery-boy` | Delivery staff view |
+| `/dashboard/delivery-monitor` | Delivery monitoring |
+| `/dashboard/display-manager` | Display screen manager |
+| `/dashboard/display-manager/ad-content` | Display ad content manager |
+| `/dashboard/messages` | Internal messaging and calls |
+| `/dashboard/menu` | Menu management |
+| `/dashboard/order-desk` | Central order desk |
+| `/dashboard/orders` | Order management |
+| `/dashboard/reports` | Reporting dashboard |
+| `/dashboard/settings` | Restaurant settings |
+| `/dashboard/settings/api-keys` | API key management |
+| `/dashboard/staff` | Staff management |
+| `/dashboard/take-order` | Dashboard order-taking surface |
+| `/dashboard/tables` | Table management |
+| `/dashboard/waiter` | Waiter dashboard |
+| `/kitchen-display` | Dedicated kitchen display |
+| `/display/[slug]` | Customer-facing display screen |
+| `/order/status/[orderId]` | Customer order status |
+| `/staff-messages` | Staff messaging screen |
+| `/staff-portal` | Staff portal |
+| `/waiter-order` | Waiter order-taking page |
 
-### 🛒 **Integrations**
-- Shopify integration
-- WordPress integration
-- Embeddable widgets
+## API Surface
 
----
+### Auth And Staff
 
-## 🛠️ Tech Stack
+- `POST /api/auth/send-otp`
+- `POST /api/auth/verify-otp`
+- `POST /api/auth/forgot-pin`
+- `POST /api/auth/staff-check`
+- `POST /api/auth/staff-login`
+- `POST /api/auth/staff-email-login`
+- `POST /api/auth/staff-setup`
+- `POST /api/auth/migrate-pins`
+- `GET/POST /api/staff`
+- `POST /api/staff/invite`
+- `POST /api/staff/resend-invite`
+- `GET/POST /api/staff/my-shift`
 
-| Layer | Technology |
-|-------|------------|
-| **Framework** | Next.js 16.1.1 (App Router) |
-| **Language** | TypeScript 5.0 |
-| **Styling** | Tailwind CSS v4 + DaisyUI |
-| **Database** | Supabase (PostgreSQL) |
-| **Auth** | Supabase Auth |
-| **State Management** | Zustand |
-| **Animations** | Framer Motion |
-| **Icons** | Lucide React |
-| **Notifications** | React Hot Toast, Sonner |
-| **Maps** | Google Maps API |
-| **SMS** | Twilio |
-| **Email** | Nodemailer |
-| **Push Notifications** | Web Push |
-| **Password Hashing** | bcryptjs |
+### Restaurant Operations
 
----
+- `GET /api/analytics`
+- `POST /api/billing/process-payment`
+- `GET/POST /api/order-flow`
+- `GET/POST /api/order-flow/delivery`
+- `POST /api/reports/generate`
+- `POST /api/tables/update-status`
+- `GET/POST /api/track`
+- `GET /api/v1/menu`
+- `GET/POST /api/v1/orders`
 
-## 📁 Project Structure
+### Delivery, Display, Media, And Settings
 
-```
-orderflow/
-├── 📁 src/
-│   ├── 📁 app/                          # Next.js App Router
-│   │   ├── 📁 api/                      # API Routes
-│   │   │   ├── 📁 auth/                 # Authentication endpoints
-│   │   │   ├── 📁 delivery/             # Delivery endpoints
-│   │   │   ├── 📁 notifications/        # Push notification endpoints
-│   │   │   ├── 📁 settings/             # Settings endpoints
-│   │   │   ├── 📁 staff/                # Staff endpoints
-│   │   │   └── 📁 v1/                   # API v1 endpoints
-│   │   │
-│   │   ├── 📁 dashboard/                # Admin Dashboard (34+ modules)
-│   │   │   ├── 📁 analytics/            # Analytics & reports
-│   │   │   ├── 📁 billing/              # Payment processing
-│   │   │   ├── 📁 cashier/              # Cashier interface
-│   │   │   ├── 📁 delivery-boy/         # Delivery staff view
-│   │   │   ├── 📁 delivery-monitor/     # Delivery monitoring
-│   │   │   ├── 📁 discounts/            # Discount management
-│   │   │   ├── 📁 display-manager/      # Display screens manager
-│   │   │   ├── 📁 expenses/             # Expense tracking
-│   │   │   ├── 📁 feedback/             # Customer feedback
-│   │   │   ├── 📁 franchise/            # Franchise management
-│   │   │   ├── 📁 inventory/            # Inventory management
-│   │   │   ├── 📁 kitchen/              # Kitchen dashboard
-│   │   │   ├── 📁 kitchen-view/         # Kitchen display
-│   │   │   ├── 📁 loyalty/              # Loyalty program
-│   │   │   ├── 📁 menu/                 # Menu management
-│   │   │   ├── 📁 my-orders/            # Staff orders view
-│   │   │   ├── 📁 my-shift/             # Personal shift view
-│   │   │   ├── 📁 order-desk/           # Order desk hub
-│   │   │   ├── 📁 orders/               # Orders management
-│   │   │   ├── 📁 profile/              # User profile
-│   │   │   ├── 📁 qr-codes/             # QR code management
-│   │   │   ├── 📁 qr-ordering/          # QR ordering settings
-│   │   │   ├── 📁 reports/              # Reports dashboard
-│   │   │   ├── 📁 reservations/         # Reservations system
-│   │   │   ├── 📁 riders/               # Delivery riders
-│   │   │   ├── 📁 settings/             # Restaurant settings
-│   │   │   ├── 📁 shifts/               # Shift management
-│   │   │   ├── 📁 specials/             # Special offers
-│   │   │   ├── 📁 staff/                # Staff management
-│   │   │   ├── 📁 staff-performance/    # Performance metrics
-│   │   │   ├── 📁 tables/               # Table management
-│   │   │   ├── 📁 take-order/           # Take order interface
-│   │   │   ├── 📁 tips/                 # Tips management
-│   │   │   └── 📁 waiter/               # Waiter interface
-│   │   │
-│   │   ├── 📁 auth/                     # Auth pages
-│   │   ├── 📁 book/                     # Booking pages
-│   │   ├── 📁 display/                  # Customer display
-│   │   ├── 📁 embed/                    # Embeddable widgets
-│   │   ├── 📁 login/                    # Login page
-│   │   ├── 📁 order/                    # Customer ordering
-│   │   ├── 📁 register/                 # Registration
-│   │   ├── 📁 screen-login/             # Screen login
-│   │   ├── 📁 setup/                    # Setup wizard
-│   │   ├── 📁 staff-login/              # Staff login
-│   │   ├── 📁 staff-setup/              # Staff setup
-│   │   ├── 📁 track/                    # Order tracking
-│   │   ├── 📁 trial-started/            # Trial page
-│   │   ├── 📁 verify-otp/               # OTP verification
-│   │   └── 📁 waiter/                   # Waiter interface
-│   │
-│   ├── 📁 components/                   # React Components
-│   │   ├── 📁 billing/                  # Billing components
-│   │   ├── 📁 chat/                     # Chat components
-│   │   ├── 📁 landing/                  # Landing page
-│   │   ├── 📁 maps/                     # Google Maps
-│   │   ├── 📁 multi-restaurant/         # Multi-restaurant
-│   │   ├── 📁 ui/                       # UI components
-│   │   ├── ThemeProvider.tsx            # Theme provider
-│   │   └── providers.tsx                # App providers
-│   │
-│   ├── 📁 hooks/                        # Custom React Hooks
-│   ├── 📁 lib/                          # Utilities & API
-│   │   ├── 📁 supabase/                 # Supabase client
-│   │   ├── api.ts                       # Main API functions
-│   │   ├── api-extended.ts              # Extended API
-│   │   ├── api-keys.ts                  # API key management
-│   │   ├── api-utils.ts                 # API utilities
-│   │   ├── hooks.ts                     # Library hooks
-│   │   ├── inventory.ts                 # Inventory functions
-│   │   ├── notifications.ts             # Notification helpers
-│   │   ├── push-notifications.ts        # Push notification service
-│   │   ├── sounds.ts                    # Sound effects
-│   │   ├── twilio.ts                    # Twilio SMS
-│   │   └── utils.ts                     # General utilities
-│   │
-│   ├── 📁 stores/                       # Zustand Stores
-│   ├── 📁 types/                        # TypeScript Types
-│   └── middleware.ts                    # Next.js Middleware
-│
-├── 📁 integrations/                     # Third-party Integrations
-│   ├── 📁 shopify/                      # Shopify integration
-│   └── 📁 wordpress/                    # WordPress integration
-│
-├── 📁 supabase/                         # Database Scripts
-│   ├── schema.sql                       # Main schema
-│   ├── complete_migration.sql           # Full migration
-│   ├── all_tables.sql                   # All tables
-│   ├── api_keys.sql                     # API keys table
-│   ├── customer_display.sql             # Customer display
-│   ├── extended_schema.sql              # Extended schema
-│   ├── gps_tracking.sql                 # GPS tracking
-│   ├── menu_item_ingredients.sql        # Ingredients
-│   ├── messages.sql                     # Messages table
-│   ├── otp_codes.sql                    # OTP codes
-│   ├── otp_improvements.sql             # OTP improvements
-│   ├── split_payments.sql               # Split payments
-│   └── staff_onboarding.sql             # Staff onboarding
-│
-├── 📁 public/                           # Static Assets
-├── vercel.json                          # Vercel Configuration
-├── next.config.ts                       # Next.js Configuration
-├── package.json                         # Dependencies
-└── tsconfig.json                        # TypeScript Config
+- `GET/POST /api/delivery/assignments`
+- `POST /api/delivery/location`
+- `GET/PUT/DELETE /api/display/ad-content/[id]`
+- `POST /api/menu/upload-image`
+- `GET/POST /api/settings/api-keys`
+- `GET/DELETE /api/settings/api-keys/[keyId]`
+- `GET/PUT /api/settings/restaurant`
+- `POST /api/settings/upload-logo`
+
+### Messaging, Notifications, And AI
+
+- `POST /api/ai/analyze-expense`
+- `POST /api/ai/role-dashboard`
+- `POST /api/messages`
+- `POST /api/messages/broadcast`
+- `GET /api/messages/call-log`
+- `GET /api/messages/conversations`
+- `POST /api/notifications/send`
+
+## Supabase And Database
+
+The `supabase/` folder contains base schema files, feature SQL scripts, and migrations for the current feature set.
+
+Important groups:
+
+- Core schema: `schema.sql`, `complete_migration.sql`, `extended_schema.sql`, `all_tables.sql`
+- Auth and staff: `staff_migration.sql`, `staff_onboarding.sql`, `staff_columns.sql`, `staff_rls_policies.sql`, `staff_tracking.sql`, `staff_avatar.sql`, `add_staff_phone.sql`
+- Orders and operations: `delivery_system.sql`, `rider_locations.sql`, `points_transactions.sql`, `split_payments.sql`, `update_daily_reports.sql`, `update_shifts_schema.sql`
+- Displays and screens: `customer_display.sql`, `screen_content.sql`, `display_system_update.sql`, `FIX_SCREEN_CONTENT_RLS.sql`, `kitchen_display_migration.sql`
+- Menu and inventory: `menu_enhancements.sql`, `menu_item_ingredients.sql`, `add_category_icon_key.sql`
+- Messaging and OTP: `messages.sql`, `otp_codes.sql`, `otp_improvements.sql`
+- Numbered migrations: `supabase/migrations/002_*` through `009_*`
+
+Apply only the migrations that match the target environment and review RLS policy scripts before running them against production.
+
+## Environment Variables
+
+Create `.env.local` for local development. Do not commit real secrets.
+
+```env
+# App
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+NODE_ENV=development
+ADMIN_SECRET_KEY=replace-with-admin-secret
+
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=replace-with-anon-key
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=replace-with-publishable-key
+SUPABASE_SERVICE_ROLE_KEY=replace-with-service-role-key
+SUPABASE_SECRET_KEY=replace-with-secret-key
+
+# OpenRouter AI
+OPEN_ROUTER_API_KEY=replace-with-openrouter-key
+OPENROUTER_API_URL=https://openrouter.ai/api/v1/chat/completions
+OPENROUTER_MODEL=liquid/lfm-2.5-1.2b-instruct:free
+
+# Email
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=replace-with-smtp-user
+SMTP_EMAIL=replace-with-from-email
+SMTP_PASS=replace-with-smtp-password
+SMTP_PASSWORD=replace-with-smtp-password
+
+# Twilio
+TWILIO_ACCOUNT_SID=replace-with-twilio-account-sid
+TWILIO_AUTH_TOKEN=replace-with-twilio-auth-token
+TWILIO_PHONE_NUMBER=replace-with-twilio-phone-number
+TWILIO_WHATSAPP_NUMBER=whatsapp:+10000000000
+
+# Google Maps
+NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=replace-with-google-maps-key
+
+# Cloudinary unsigned uploads
+NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME=replace-with-cloud-name
+NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET=replace-with-upload-preset
+
+# Web Push
+NEXT_PUBLIC_VAPID_PUBLIC_KEY=replace-with-vapid-public-key
 ```
 
----
+The committed `.env.example` currently includes the OpenRouter values used by the AI endpoints. Add project-specific provider variables to local/deployment environments as needed.
 
-## 🚀 Installation
+## Local Development
 
-### Prerequisites
-
-- **Node.js** 18+ (LTS recommended)
-- **npm** or **yarn** or **pnpm**
-- **Supabase** account ([supabase.com](https://supabase.com))
-- **Git**
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/yourusername/orderflow.git
-cd orderflow
-```
-
-### 2. Install Dependencies
+Use npm because this repository includes `package-lock.json`.
 
 ```bash
 npm install
-# or
-yarn install
-# or
-pnpm install
-```
-
-### 3. Configure Environment Variables
-
-Create a `.env.local` file in the root directory (see [Environment Variables](#-environment-variables) section below).
-
-### 4. Set Up the Database
-
-Run the SQL scripts in your Supabase SQL Editor in this order:
-
-1. `supabase/schema.sql` - Core tables and RLS policies
-2. `supabase/extended_schema.sql` - Extended features
-3. `supabase/api_keys.sql` - API key management
-4. Additional migration files as needed
-
-### 5. Enable Realtime
-
-In your Supabase dashboard, enable realtime for:
-- `orders`
-- `order_items`
-- `tables`
-- `staff`
-
-### 6. Start Development Server
-
-```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to view the app.
+Open `http://localhost:3000`.
 
----
-
-## 🔐 Environment Variables
-
-Create a `.env.local` file in the root directory with the following variables:
-
-```env
-# ================================
-# SUPABASE CONFIGURATION (Required)
-# ================================
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
-SUPABASE_SECRET_KEY=your-rotated-supabase-secret-key
-
-# ================================
-# APP CONFIGURATION
-# ================================
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-NEXT_PUBLIC_APP_NAME=OrderFlow
-
-# ================================
-# GOOGLE MAPS (Optional - for delivery tracking)
-# ================================
-NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your-google-maps-api-key
-
-# ================================
-# TWILIO SMS (Optional - for OTP & notifications)
-# ================================
-TWILIO_ACCOUNT_SID=your-twilio-account-sid
-TWILIO_AUTH_TOKEN=your-twilio-auth-token
-TWILIO_PHONE_NUMBER=+1234567890
-
-# ================================
-# EMAIL CONFIGURATION (Optional - for notifications)
-# ================================
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your-email@gmail.com
-SMTP_PASS=your-app-password
-
-# ================================
-# WEB PUSH NOTIFICATIONS (Optional)
-# ================================
-NEXT_PUBLIC_VAPID_PUBLIC_KEY=your-vapid-public-key
-VAPID_PRIVATE_KEY=your-vapid-private-key
-VAPID_EMAIL=mailto:your-email@example.com
-```
-
-### Getting API Keys
-
-| Service | Instructions |
-|---------|-------------|
-| **Supabase** | Create project at [supabase.com](https://supabase.com) → Settings → API |
-| **Google Maps** | [Google Cloud Console](https://console.cloud.google.com) → APIs & Services → Enable Maps JavaScript API |
-| **Twilio** | Create account at [twilio.com](https://twilio.com) → Console → Account SID & Auth Token |
-| **VAPID Keys** | Run: `npx web-push generate-vapid-keys` |
-
----
-
-## 🗄️ Database Setup
-
-### Core Tables
-
-| Table | Description |
-|-------|-------------|
-| `restaurants` | Restaurant profiles and settings |
-| `staff` | Staff members with roles and PINs |
-| `categories` | Menu categories |
-| `menu_items` | Menu items with details |
-| `tables` | Restaurant tables |
-| `orders` | Order records |
-| `order_items` | Order line items |
-| `payments` | Payment transactions |
-
-### Extended Tables (Additional Features)
-
-| Table | Description |
-|-------|-------------|
-| `api_keys` | API key management |
-| `otp_codes` | OTP verification |
-| `messages` | Customer/staff messages |
-| `gps_locations` | Delivery tracking |
-
-### Running Migrations
+Useful scripts:
 
 ```bash
-# Connect to Supabase and run SQL files
-# In Supabase Dashboard → SQL Editor → Run each file
+npm run lint
+npm run build
+npm run start
 ```
 
----
+## Docker
 
-## 🌐 Deployment
+Builds use a multi-stage Next.js Dockerfile and a helper script that can load environment variables from a Docker secret during the build.
 
-### Deploy to Vercel (Recommended)
-
-#### Option 1: One-Click Deploy
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/yourusername/orderflow)
-
-#### Option 2: Manual Deployment
-
-1. **Push to GitHub**
-   ```bash
-   git add .
-   git commit -m "Initial commit"
-   git push origin main
-   ```
-
-2. **Import to Vercel**
-   - Go to [vercel.com](https://vercel.com)
-   - Import your GitHub repository
-   - Configure environment variables
-   - Deploy
-
-3. **Configure Environment Variables in Vercel**
-   - Go to Project Settings → Environment Variables
-   - Add all variables from `.env.local`
-
-### Vercel Configuration
-
-The project includes a `vercel.json` configuration file for optimal deployment.
-
-### Build Commands
-
-| Command | Description |
-|---------|-------------|
-| `npm run build` | Build for production |
-| `npm run start` | Start production server |
-| `npm run lint` | Run ESLint |
-
----
-
-## 🔌 API Reference
-
-### Authentication API
-
-```typescript
-// Staff PIN Login
-POST /api/auth/staff-login
-Body: { restaurant_id, pin }
-
-// Register Owner
-POST /api/auth/register
-Body: { email, password, name }
-
-// OTP Verification
-POST /api/auth/verify-otp
-Body: { phone, code }
+```bash
+docker compose up --build
 ```
 
-### Categories API
+The Compose service:
 
-```typescript
-fetchCategories(restaurantId)      // Get all categories
-createCategory(restaurantId, data) // Create new category
-updateCategory(categoryId, data)   // Update category
-deleteCategory(categoryId)         // Delete category
+- Builds from `Dockerfile`
+- Loads runtime variables from `.env.local`
+- Mounts `.env.local` as the `om_env` build secret
+- Exposes the app on port `3000`
+- Runs `node server.js` from the Next.js standalone output
+
+For production deployments, provide secrets through the platform secret manager instead of committing env files.
+
+## Deployment
+
+### Vercel
+
+1. Connect the `nexus-pos` repository.
+2. Set the environment variables listed above.
+3. Use the default Next.js build command:
+
+```bash
+npm run build
 ```
 
-### Menu Items API
+4. Deploy from `main`.
 
-```typescript
-fetchMenuItems(categoryId)         // Get items by category
-fetchAllMenuItems(restaurantId)    // Get all items
-createMenuItem(restaurantId, ...)  // Create item
-updateMenuItem(itemId, data)       // Update item
-deleteMenuItem(itemId)             // Delete item
+### Docker Host
+
+```bash
+docker compose up --build -d
 ```
 
-### Orders API
+Make sure `.env.local` exists on the host or replace `env_file`/secret handling with your deployment platform's secret injection.
 
-```typescript
-fetchOrders(restaurantId, status)  // Get orders
-createOrder(restaurantId, ...)     // Create order
-updateOrderStatus(orderId, status) // Update status
-```
+## Security Notes
 
-### Tables API
+- Never commit `.env`, `.env.local`, production secrets, API tokens, or provider credentials.
+- Keep Supabase service-role keys server-side only.
+- Review SQL and RLS scripts before applying them to production.
+- Rotate any provider key if it was ever exposed in local logs or history.
+- `.claude/worktrees/` is ignored and should not be tracked.
 
-```typescript
-fetchTables(restaurantId)          // Get all tables
-updateTableStatus(tableId, status) // Update status
-```
+## Known Verification State
 
----
+The current README update is documentation-only. Existing application lint debt should be handled separately from documentation publishing.
 
-## 👥 User Roles
+Previous lint output showed source-level issues such as explicit `any`, React hook/compiler rules, and `prefer-const` findings. Those are not changed by this README update.
 
-| Role | Access Level | Features |
-|------|-------------|----------|
-| **Owner** | Full access | All features, settings, analytics, staff management |
-| **Manager** | High access | Orders, menu, staff, reports (no billing settings) |
-| **Waiter** | Order access | Take orders, view tables, call kitchen |
-| **Kitchen** | Kitchen access | View and manage order preparation |
-| **Cashier** | Billing access | Process payments, view orders |
+## License
 
----
-
-## 📍 Routes
-
-### Public Routes
-
-| Route | Description |
-|-------|-------------|
-| `/` | Landing page |
-| `/login` | Staff login |
-| `/register` | Owner registration |
-| `/order` | Customer self-ordering |
-| `/track` | Order tracking |
-| `/book` | Table booking |
-
-### Dashboard Routes
-
-| Route | Description |
-|-------|-------------|
-| `/dashboard` | Main dashboard |
-| `/dashboard/menu` | Menu management |
-| `/dashboard/tables` | Table management |
-| `/dashboard/orders` | Orders management |
-| `/dashboard/kitchen` | Kitchen dashboard |
-| `/dashboard/kitchen-view` | Kitchen display screen |
-| `/dashboard/billing` | Payment processing |
-| `/dashboard/analytics` | Analytics dashboard |
-| `/dashboard/reports` | Reports |
-| `/dashboard/staff` | Staff management |
-| `/dashboard/settings` | Restaurant settings |
-| `/dashboard/qr-codes` | QR code management |
-| `/dashboard/reservations` | Reservations |
-| `/dashboard/inventory` | Inventory management |
-| `/dashboard/delivery-monitor` | Delivery tracking |
-| `/dashboard/cashier` | Cashier interface |
-| `/dashboard/take-order` | Order desk |
-
----
-
-## 🔒 Security
-
-- **Row Level Security (RLS)**: Enabled on all Supabase tables
-- **Authentication**: Supabase Auth with email/password
-- **Authorization**: Role-based access control
-- **PIN System**: 4-digit PIN for staff quick login
-- **Password Hashing**: bcryptjs for secure passwords
-- **Middleware Protection**: Route-level authentication checks
-
----
-
-## 🔗 Integrations
-
-### Shopify
-- Sync products with Shopify store
-- Order synchronization
-- Inventory management
-
-### WordPress
-- WooCommerce integration
-- Menu embedding
-- Order processing
-
-### Embed Widget
-- Embeddable ordering widget for any website
-- Customizable appearance
-- Direct order placement
-
----
-
-## 🚧 Roadmap
-
-### In Progress (60% Complete)
-- [x] Core order management
-- [x] Kitchen display system
-- [x] Staff management
-- [x] Basic analytics
-- [x] Table management
-- [x] Payment processing
-- [ ] Inventory management (partial)
-- [ ] Delivery tracking (partial)
-
-### Planned Features
-- [ ] Multi-language support
-- [ ] Mobile native apps (React Native)
-- [ ] Advanced inventory management
-- [ ] Customer loyalty program
-- [ ] Online payment gateway integration
-- [ ] AI-powered menu recommendations
-- [ ] Advanced reporting & exports
-- [ ] White-label solution
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Development Guidelines
-
-- Follow TypeScript best practices
-- Use Tailwind CSS for styling
-- Write meaningful commit messages
-- Test your changes thoroughly
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
----
-
-## 💬 Support
-
-For support, email support@orderflow.app or open an issue on GitHub.
-
----
-
-<div align="center">
-
-Made with ❤️ for the restaurant industry
-
-**[⬆ Back to Top](#-orderflow---complete-restaurant-pos--management-system)**
-
-</div>
+Private project unless a license file is added.
