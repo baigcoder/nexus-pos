@@ -25,6 +25,7 @@ export async function PUT(request: NextRequest) {
             email,
             currency,
             taxRate,
+            plan,
             serviceCharge,
             serviceChargeType,
             taxMode,
@@ -39,6 +40,10 @@ export async function PUT(request: NextRequest) {
 
         if (!isValidUUID(restaurantId)) {
             return NextResponse.json({ error: 'Invalid restaurant ID format' }, { status: 400 })
+        }
+
+        if (restaurantId !== auth.restaurantId) {
+            return NextResponse.json({ error: 'Access denied for this restaurant' }, { status: 403 })
         }
 
         const supabase = getAdminClient()
@@ -80,6 +85,10 @@ export async function PUT(request: NextRequest) {
 
         if (currency !== undefined) {
             updates.currency = currency
+        }
+
+        if (plan !== undefined && ['starter', 'professional', 'enterprise'].includes(plan)) {
+            updates.plan = plan
         }
 
         if (taxRate !== undefined) {
@@ -130,6 +139,13 @@ export async function PUT(request: NextRequest) {
 
         // Merge any additional settings passed directly
         if (settings !== undefined && typeof settings === 'object') {
+            if (settings && Object.hasOwn(settings, 'delivery_fee')) {
+                const fee = settings.delivery_fee
+                if (typeof fee !== 'number' || !Number.isFinite(fee) || fee < 0 ||
+                    fee >= 10_000_000 || Number(fee.toFixed(2)) !== fee) {
+                    return NextResponse.json({ error: 'Delivery fee must be a nonnegative amount with up to two decimal places' }, { status: 400 })
+                }
+            }
             Object.assign(settingsUpdate, settings)
         }
 
@@ -177,6 +193,10 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: 'Invalid restaurant ID format' }, { status: 400 })
         }
 
+        if (restaurantId !== auth.restaurantId) {
+            return NextResponse.json({ error: 'Access denied for this restaurant' }, { status: 403 })
+        }
+
         const supabase = getAdminClient()
 
         const { data: restaurant, error } = await supabase
@@ -216,6 +236,10 @@ export async function PATCH(request: NextRequest) {
 
         if (!isValidUUID(restaurantId)) {
             return NextResponse.json({ error: 'Invalid restaurant ID format' }, { status: 400 })
+        }
+
+        if (restaurantId !== auth.restaurantId) {
+            return NextResponse.json({ error: 'Access denied for this restaurant' }, { status: 403 })
         }
 
         const supabase = getAdminClient()

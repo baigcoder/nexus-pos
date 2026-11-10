@@ -46,6 +46,7 @@ interface SettingsState {
   kitchenDarkMode: boolean
   autoRefreshInterval: 15 | 30 | 60
   logoUrl: string | null
+  plan: string
 }
 
 const DEFAULT_HOURS: OperatingHours = {
@@ -119,6 +120,7 @@ export default function SettingsPage() {
       kitchenDarkMode: (s.kitchen_dark_mode as boolean) ?? false,
       autoRefreshInterval: (s.auto_refresh_interval as 15 | 30 | 60) ?? 30,
       logoUrl: restaurant?.logo_url ?? null,
+      plan: restaurant?.plan || 'starter',
     }
   }, [restaurant])
 
@@ -213,6 +215,7 @@ export default function SettingsPage() {
           phone: settings.phone,
           email: settings.email,
           currency: settings.currency,
+          plan: settings.plan,
           taxRate: settings.taxRate,
           serviceCharge: settings.serviceCharge,
           serviceChargeType: settings.serviceChargeType,
@@ -521,6 +524,19 @@ export default function SettingsPage() {
                           {CURRENCIES.map(c => (
                             <option key={c.value} value={c.value}>{c.label}</option>
                           ))}
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label htmlFor="plan" className="label">Plan</label>
+                        <select
+                          id="plan"
+                          value={settings.plan}
+                          onChange={(e) => updateSetting('plan', e.target.value)}
+                          className="w-full h-11 px-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-primary)] text-sm outline-none focus:border-brand/50 focus:ring-1 focus:ring-brand/20 appearance-none"
+                        >
+                          <option value="starter">Starter</option>
+                          <option value="professional">Professional</option>
+                          <option value="enterprise">Enterprise</option>
                         </select>
                       </div>
                       <div className="space-y-2">

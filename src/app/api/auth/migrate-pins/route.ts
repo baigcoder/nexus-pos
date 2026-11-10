@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { timingSafeEqual } from '@/lib/auth'
 import bcrypt from 'bcryptjs'
 
 /**
@@ -23,7 +24,7 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        if (!adminKey || adminKey !== expectedKey) {
+        if (!adminKey || !timingSafeEqual(adminKey, expectedKey)) {
             return NextResponse.json(
                 { error: 'Unauthorized' },
                 { status: 401 }

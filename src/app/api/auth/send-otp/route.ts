@@ -10,7 +10,7 @@ import {
     createAuditEvent,
     logAuthEvent,
     getClientFingerprint,
-    checkRateLimit,
+    checkRateLimitPersistent,
     getRateLimitHeaders,
     AUTH_CONSTANTS,
 } from '@/lib/auth'
@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
         const emailLimitKey = `otp:email:${email}`
         const ipLimitKey = `otp:ip:${clientIp}`
 
-        const emailRateResult = checkRateLimit(emailLimitKey, OTP_RATE_CONFIG)
+        const emailRateResult = await checkRateLimitPersistent(emailLimitKey, OTP_RATE_CONFIG)
         if (!emailRateResult.allowed) {
             await logAuthEvent(createAuditEvent('rate_limit_exceeded', email, clientIp, { type: 'otp_email_limit' }))
             return NextResponse.json(
@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        const ipRateResult = checkRateLimit(ipLimitKey, IP_RATE_CONFIG)
+        const ipRateResult = await checkRateLimitPersistent(ipLimitKey, IP_RATE_CONFIG)
         if (!ipRateResult.allowed) {
             await logAuthEvent(createAuditEvent('rate_limit_exceeded', clientIp, clientIp, { type: 'otp_ip_limit' }))
             return NextResponse.json(

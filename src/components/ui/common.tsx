@@ -17,7 +17,7 @@ interface CleanLayoutProps {
 
 export function PremiumLayout({ children, className, fullWidth = false }: CleanLayoutProps) {
     return (
-        <div className={cn('min-h-screen bg-neutral-950 text-foreground font-sans selection:bg-orange-500/20', className)}>
+        <div className={cn('min-h-screen bg-background text-foreground font-sans selection:bg-brand/20 transition-colors duration-300', className)}>
             <div className={cn(
                 "mx-auto transition-all duration-500",
                 fullWidth ? "max-w-none px-0" : "max-w-7xl px-4 sm:px-6 lg:px-8"
@@ -51,22 +51,22 @@ export function Button({
     disabled,
     ...props
 }: ButtonProps) {
-    const baseStyles = 'inline-flex items-center justify-center gap-2 font-semibold transition-all duration-300 outline-none disabled:opacity-50 disabled:cursor-not-allowed rounded-full relative overflow-hidden group'
+    const baseStyles = 'inline-flex items-center justify-center gap-2 font-semibold transition-all duration-300 outline-none disabled:opacity-50 disabled:cursor-not-allowed rounded-xl relative overflow-hidden group select-none cursor-pointer'
 
     const variants = {
-        primary: 'bg-orange-600 text-white hover:bg-orange-700 shadow-lg shadow-[0_10px_40px_-10px_rgba(249,115,22,0.4)] hover:shadow-xl hover:scale-[1.02] active:scale-95',
-        secondary: 'bg-neutral-800 text-white hover:bg-black shadow-sm hover:translate-y-[-1px]',
-        black: 'bg-neutral-900 text-white hover:bg-black dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white shadow-lg shadow-neutral-900/20',
-        ghost: 'bg-transparent text-muted-foreground hover:bg-surface-hover hover:text-foreground',
-        danger: 'bg-error text-white hover:bg-red-600 shadow-sm',
-        outline: 'bg-transparent border border-border text-foreground hover:bg-surface-hover hover:border-orange-500/50',
-        white: 'bg-white text-black hover:bg-neutral-100 shadow-xl shadow-white/10',
+        primary: 'bg-brand text-white hover:bg-brand-hover shadow-md hover:shadow-lg active:scale-[0.98] transition-all',
+        secondary: 'bg-surface-raised border border-border text-[var(--text-primary)] hover:bg-surface-hover hover:border-[var(--border-strong)] active:scale-[0.98] transition-all',
+        black: 'bg-neutral-900 text-white hover:bg-black dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white shadow-md active:scale-[0.98]',
+        ghost: 'bg-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+        danger: 'bg-error text-white hover:bg-error-subtle hover:text-red-500 border border-error/20 active:scale-[0.98]',
+        outline: 'bg-transparent border border-border text-[var(--text-primary)] hover:bg-surface-hover hover:border-brand/40 active:scale-[0.98]',
+        white: 'bg-white text-black hover:bg-neutral-100 shadow-md active:scale-[0.98]',
     }
 
     const sizes = {
         sm: 'px-4 py-2 text-xs',
-        md: 'px-6 py-3 text-sm',
-        lg: 'px-8 py-4 text-base',
+        md: 'px-5 py-2.5 text-sm',
+        lg: 'px-7 py-3 text-base',
     }
 
     return (
@@ -79,9 +79,9 @@ export function Button({
                 <Loader2 className="w-4 h-4 animate-spin text-current" />
             ) : (
                 <>
-                    {Icon && iconPosition === 'left' && <Icon className="w-4 h-4 shrink-0 transition-transform group-hover:-translate-x-1" />}
+                    {Icon && iconPosition === 'left' && <Icon className="w-4 h-4 shrink-0 transition-transform group-hover:-translate-x-0.5" />}
                     <span className="relative z-10">{children}</span>
-                    {Icon && iconPosition === 'right' && <Icon className="w-4 h-4 shrink-0 transition-transform group-hover:translate-x-1" />}
+                    {Icon && iconPosition === 'right' && <Icon className="w-4 h-4 shrink-0 transition-transform group-hover:translate-x-0.5" />}
                 </>
             )}
         </button>
@@ -101,27 +101,44 @@ interface CardProps {
 }
 
 export function Card({ children, className, variant = 'default', hover = false, onClick }: CardProps) {
-    const Component = onClick ? motion.button : motion.div
-
     const variants = {
-        default: 'bg-surface border border-border/50 shadow-md shadow-neutral-500/5 dark:shadow-black/20',
-        flat: 'bg-neutral-50 dark:bg-neutral-900/40',
+        default: 'bg-surface border border-border/80 shadow-premium',
+        flat: 'bg-surface-raised border border-border-subtle',
         outline: 'bg-transparent border border-border',
-        glass: 'glass',
+        glass: 'glass backdrop-blur-md',
+    }
+
+    const hoverClasses = hover ? 'hover:border-brand/40 hover:shadow-lg transition-all duration-300 hover:-translate-y-[2px] cursor-pointer' : ''
+
+    if (onClick) {
+        return (
+            <motion.button
+                onClick={onClick}
+                className={cn(
+                    'rounded-2xl p-6 relative overflow-hidden text-left',
+                    variants[variant],
+                    hoverClasses,
+                    className
+                )}
+                whileTap={{ scale: 0.98 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+            >
+                {children}
+            </motion.button>
+        )
     }
 
     return (
-        <Component
-            onClick={onClick}
+        <motion.div
             className={cn(
                 'rounded-2xl p-6 relative overflow-hidden text-left',
                 variants[variant],
-                hover && 'hover:border-orange-500/30 hover:shadow-lg transition-all duration-300 hover:-translate-y-1',
+                hoverClasses,
                 className
             )}
         >
             {children}
-        </Component>
+        </motion.div>
     )
 }
 
@@ -137,17 +154,17 @@ interface BadgeProps {
 
 export function Badge({ children, variant = 'default', className }: BadgeProps) {
     const variants = {
-        default: 'bg-neutral-100 text-neutral-600 border border-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:border-neutral-700',
-        success: 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 dark:text-emerald-400',
-        warning: 'bg-amber-500/10 text-amber-600 border border-amber-500/20 dark:text-amber-400',
-        error: 'bg-rose-500/10 text-rose-600 border border-rose-500/20 dark:text-rose-400',
-        primary: 'bg-primary/10 text-primary border border-primary/20',
-        neutral: 'bg-neutral-50 text-neutral-600 border border-neutral-200 dark:bg-neutral-900 dark:text-neutral-400 dark:border-neutral-800',
-        outline: 'border border-orange-500/20 bg-orange-500/5 text-orange-500',
+        default: 'bg-surface-raised text-[var(--text-secondary)] border border-border',
+        success: 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20',
+        warning: 'bg-amber-500/10 text-amber-500 border border-amber-500/20',
+        error: 'bg-red-500/10 text-red-500 border border-red-500/20',
+        primary: 'bg-brand-subtle text-brand border border-brand/20',
+        neutral: 'bg-surface-raised text-[var(--text-muted)] border border-border',
+        outline: 'border border-brand/30 bg-transparent text-brand',
     }
 
     return (
-        <span className={cn('inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold tracking-wide', variants[variant], className)}>
+        <span className={cn('inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold tracking-wide transition-all duration-300', variants[variant], className)}>
             {children}
         </span>
     )
@@ -173,24 +190,24 @@ export function StatCard({
     className?: string;
 }) {
     return (
-        <Card className={cn("flex flex-col gap-4", className)}>
+        <Card className={cn("flex flex-col gap-4 border border-border/80 shadow-premium", className)}>
             <div className="flex items-center justify-between">
-                <span className="text-sm font-bold text-muted-foreground uppercase tracking-wider">{label}</span>
-                {Icon && <div className="p-2 rounded-lg bg-orange-500/5"><Icon className="w-5 h-5 text-orange-500" /></div>}
+                <span className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-wider">{label}</span>
+                {Icon && <div className="p-2.5 rounded-xl bg-brand-subtle"><Icon className="w-4 h-4 text-brand" /></div>}
             </div>
 
             <div className="flex items-end justify-between">
                 <div>
-                    <h3 className="text-3xl font-bold text-foreground tracking-tight">{value}</h3>
-                    {sublabel && <p className="text-xs text-muted-foreground mt-1 font-medium">{sublabel}</p>}
+                    <h3 className="text-3xl font-bold font-display text-[var(--text-primary)] tracking-tight">{value}</h3>
+                    {sublabel && <p className="text-xs text-[var(--text-muted)] mt-1 font-medium">{sublabel}</p>}
                 </div>
 
                 {change !== undefined && (
                     <div className={cn(
-                        'flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-full',
-                        change >= 0 ? 'bg-success/10 text-success' : 'bg-error/10 text-error'
+                        'flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full',
+                        change >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'
                     )}>
-                        {change >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                        {change >= 0 ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
                         {Math.abs(change)}%
                     </div>
                 )}
@@ -226,7 +243,7 @@ export function Modal({ isOpen, onClose, title, children, className, size = 'md'
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
                         onClick={onClose}
                     />
                     <motion.div
@@ -236,8 +253,8 @@ export function Modal({ isOpen, onClose, title, children, className, size = 'md'
                         className={cn("relative bg-background border border-border rounded-3xl shadow-2xl w-full max-h-[90vh] flex flex-col overflow-hidden", modalSizes[size], className)}
                     >
                         <div className="p-5 border-b border-border flex items-center justify-between bg-surface/50">
-                            <h2 className="text-lg font-bold text-foreground">{title}</h2>
-                            <button onClick={onClose} className="p-2 rounded-full hover:bg-surface-hover text-muted-foreground transition-all hover:rotate-90"><X className="w-5 h-5" /></button>
+                            <h2 className="text-lg font-bold text-[var(--text-primary)] font-display">{title}</h2>
+                            <button onClick={onClose} className="p-2 rounded-full hover:bg-surface-hover text-[var(--text-muted)] transition-all hover:rotate-90 cursor-pointer"><X className="w-5 h-5" /></button>
                         </div>
                         <div className="p-6 overflow-y-auto">{children}</div>
                     </motion.div>
@@ -254,14 +271,14 @@ export function Modal({ isOpen, onClose, title, children, className, size = 'md'
 export function Input({ label, error, icon: Icon, className, ...props }: any) {
     return (
         <div className="w-full space-y-2">
-            {label && <label className="block text-sm font-bold text-foreground/80">{label}</label>}
+            {label && <label className="block text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">{label}</label>}
             <div className="relative group">
-                {Icon && <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground group-focus-within:text-primary transition-colors"><Icon className="w-4 h-4" /></div>}
+                {Icon && <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] group-focus-within:text-brand transition-colors"><Icon className="w-4 h-4" /></div>}
                 <input
                     className={cn(
-                        'w-full bg-surface border border-border px-4 py-3 rounded-xl outline-none transition-all text-sm placeholder:text-muted-foreground/40 font-medium',
-                        'focus:border-primary focus:ring-4 focus:ring-primary/10',
-                        Icon && 'pl-10',
+                        'w-full bg-surface border border-border px-4 py-3 rounded-xl outline-none transition-all text-sm placeholder:text-[var(--text-disabled)] text-[var(--text-primary)] font-medium',
+                        'focus:border-brand focus:ring-4 focus:ring-brand-subtle',
+                        Icon && 'pl-11',
                         error && 'border-error focus:border-error focus:ring-error/10',
                         className
                     )}
@@ -276,13 +293,13 @@ export function Input({ label, error, icon: Icon, className, ...props }: any) {
 export function SearchInput({ value, onChange, placeholder = 'Search...' }: any) {
     return (
         <div className="relative w-full">
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"><Search className="w-4 h-4" /></div>
+            <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"><Search className="w-4 h-4" /></div>
             <input
                 type="text"
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 placeholder={placeholder}
-                className="w-full bg-surface pl-10 pr-4 py-2.5 rounded-xl border border-border outline-none transition-all focus:border-primary focus:ring-4 focus:ring-primary/5 text-sm font-medium shadow-sm"
+                className="w-full bg-surface pl-11 pr-4 py-2.5 rounded-xl border border-border outline-none transition-all focus:border-brand focus:ring-4 focus:ring-brand-subtle text-sm font-medium shadow-sm text-[var(--text-primary)] placeholder:text-[var(--text-disabled)]"
             />
         </div>
     )
@@ -293,17 +310,17 @@ export function SearchInput({ value, onChange, placeholder = 'Search...' }: any)
 // ============================================
 
 export function LoadingSpinner({ size = 'md' }: any) {
-    return <Loader2 className={cn('animate-spin text-primary', size === 'sm' && 'w-4 h-4', size === 'md' && 'w-8 h-8', size === 'lg' && 'w-12 h-12')} />
+    return <Loader2 className={cn('animate-spin text-brand', size === 'sm' && 'w-4 h-4', size === 'md' && 'w-8 h-8', size === 'lg' && 'w-12 h-12')} />
 }
 
 export function PageLoading() {
     return (
-        <div className="h-[60vh] flex flex-col items-center justify-center gap-6">
+        <div className="h-[60vh] flex flex-col items-center justify-center gap-6 bg-background">
             <div className="relative">
-                <div className="absolute inset-0 bg-primary/20 blur-xl rounded-full"></div>
+                <div className="absolute inset-0 bg-brand/20 blur-xl rounded-full"></div>
                 <LoadingSpinner size="lg" />
             </div>
-            <p className="text-xs font-bold text-muted-foreground uppercase tracking-[0.2em] animate-pulse">Loading System...</p>
+            <p className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-[0.2em] animate-pulse">Loading System...</p>
         </div>
     )
 }
@@ -313,16 +330,16 @@ export function EmptyState({ icon: Icon, title, description, action }: any) {
         <div className="flex flex-col items-center justify-center py-20 text-center">
             {Icon && (
                 <div className="relative mb-6 group">
-                    <div className="absolute inset-0 bg-primary/10 blur-xl rounded-full group-hover:bg-primary/20 transition-all"></div>
+                    <div className="absolute inset-0 bg-brand/10 blur-xl rounded-full group-hover:bg-brand/20 transition-all"></div>
                     <div className="w-20 h-20 rounded-2xl bg-surface border border-border flex items-center justify-center relative">
-                        <Icon className="w-10 h-10 text-primary/60 group-hover:scale-110 transition-transform duration-300" />
+                        <Icon className="w-10 h-10 text-brand group-hover:scale-110 transition-transform duration-300" />
                     </div>
                 </div>
             )}
-            <h3 className="text-xl font-bold text-foreground mb-2 tracking-tight">{title}</h3>
-            <p className="text-muted-foreground max-w-sm mb-8 text-sm font-medium leading-relaxed">{description}</p>
+            <h3 className="text-xl font-bold text-[var(--text-primary)] mb-2 tracking-tight font-display">{title}</h3>
+            <p className="text-[var(--text-secondary)] max-w-sm mb-8 text-sm font-medium leading-relaxed">{description}</p>
             {action && (
-                <Button onClick={action.onClick} variant="primary" className="rounded-full px-8 shadow-lg shadow-primary/20">
+                <Button onClick={action.onClick} variant="primary" className="rounded-full px-8 shadow-lg shadow-brand/20">
                     {action.label}
                 </Button>
             )}

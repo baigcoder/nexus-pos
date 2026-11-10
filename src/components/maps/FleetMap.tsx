@@ -51,6 +51,7 @@ export default function FleetMap({
         script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&callback=initFleetMap`
         script.async = true
         script.defer = true
+        script.onerror = () => setError("Could not load the fleet map.")
 
         window.initFleetMap = () => {
             const google = window.google
@@ -87,6 +88,7 @@ export default function FleetMap({
         document.head.appendChild(script)
 
         return () => {
+            script.remove()
             delete window.initFleetMap
         }
     }, [restaurantLocation])
@@ -171,11 +173,7 @@ export default function FleetMap({
                 </div>
                 <div className="flex items-center gap-2">
                     <div className="w-3 h-3 rounded-full bg-orange-500"></div>
-                    <span className="text-white">On Delivery</span>
-                </div>
-                <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-neutral-500"></div>
-                    <span className="text-white">Offline</span>
+                    <span className="text-white">Assigned</span>
                 </div>
             </div>
         </div>

@@ -177,7 +177,7 @@ export async function GET(request: NextRequest) {
 
         const { data: staff, error } = await supabase
             .from('staff')
-            .select('*')
+            .select('id, restaurant_id, user_id, name, email, phone, role, is_active, is_archived, avatar_url, shift, hire_date, last_login_at, created_at, updated_at, emergency_contact, admin_notes, needs_setup')
             .eq('restaurant_id', restaurantId)
             .order('name')
 

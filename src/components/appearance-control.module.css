@@ -1,0 +1,17 @@
+.control {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding-inline-start: 8px;
+    min-height: 42px;
+    color: inherit;
+    border: 1px solid var(--appearance-line, var(--border-strong));
+    background: var(--appearance-bg, var(--surface));
+    border-radius: 7px;
+}
+.control svg { flex: none; color: var(--appearance-icon, var(--text-secondary)); }
+.control select { min-height: 40px; max-width: 76px; padding: 0 5px 0 0; background: transparent; color: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+.control option { background: var(--appearance-bg, var(--surface)); color: inherit; }
+.control:focus-within { outline: 2px solid var(--appearance-focus, var(--ring)); outline-offset: 2px; }
+.control select:focus-visible { outline: none !important; }
+@media (max-width: 760px) { .control select { font-size: 16px; } }

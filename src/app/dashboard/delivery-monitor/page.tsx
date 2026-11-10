@@ -1,728 +1,224 @@
 'use client'
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import {
-  Activity,
-  Truck,
-  MapPin,
-  Clock,
-  CheckCircle2,
-  AlertTriangle,
-  TrendingUp,
-  User,
-  Package,
-  Navigation,
-  Phone,
-  Zap,
-  Timer,
-  Star,
-  RefreshCw,
-  Filter,
-  MoreVertical,
-  Eye,
-  ChefHat,
-  XCircle,
-  Map as MapIcon
-} from 'lucide-react'
-import { Card, Button, Badge, Modal, LoadingSpinner } from '@/components/ui/common'
-import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores'
-import { useToast } from '@/components/ui/toast'
-import { createClient } from '@/lib/supabase/client'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
+import { Bike, Map, Package, Phone } from 'lucide-react'
 import FleetMap from '@/components/maps/FleetMap'
 import LiveTrackingMap from '@/components/maps/LiveTrackingMap'
+import { DeliveryBadge, DeliveryHeader, DeliveryNotice, DropOff, LastSync, RefreshDeliveries } from '@/components/service/DeliveryUI'
+import {
+    cashToSettle, deliveryAction, inProgress, lineItems, locationState, onTrip, orderLabel, phoneLink, point,
+    stage, timeLabel, useDeliveries, useRiderRoster, type Delivery,
+} from '@/components/service/delivery-data'
+import { money, ReviewDialog, SearchField } from '@/components/service/ServiceOrder'
+import styles from '@/components/service/delivery.module.css'
+import work from '@/components/service/service-order.module.css'
+import { useAuthStore } from '@/stores'
 
-// Types
-type DeliveryStatus = 'new' | 'confirmed' | 'preparing' | 'ready' | 'dispatched' | 'delivered'
-type RiderStatus = 'online' | 'offline' | 'busy'
-
-interface ActiveDelivery {
-  id: string
-  orderNumber: number
-  customerName: string
-  customerPhone: string
-  address: string
-  status: DeliveryStatus
-  rider: {
-    id?: string
-    name: string
-    phone: string
-    status: RiderStatus
-  } | null
-  items: number
-  total: number
-  createdAt: string
-  eta: number
-}
-
-interface Rider {
-  id: string
-  name: string
-  phone: string
-  status: RiderStatus
-  activeDeliveries: number
-  location?: { lat: number; lng: number }
-}
-
-const statusConfig: Record<DeliveryStatus, { label: string; color: string; bg: string }> = {
-  new: { label: 'New', color: 'text-rose-500', bg: 'bg-rose-500/10' },
-  confirmed: { label: 'Confirmed', color: 'text-blue-500', bg: 'bg-blue-500/10' },
-  preparing: { label: 'Preparing', color: 'text-brand', bg: 'bg-brand-subtle' },
-  ready: { label: 'Ready', color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
-  dispatched: { label: 'Out for Delivery', color: 'text-brand', bg: 'bg-brand-subtle' },
-  delivered: { label: 'Delivered', color: 'text-[var(--text-muted)]', bg: 'bg-[var(--surface-active)]' },
-}
-
-function normalizeDeliveryStatus(assignmentStatus?: string, orderStatus?: string): DeliveryStatus {
-  if (assignmentStatus === 'delivered' || orderStatus === 'paid') return 'delivered'
-  if (['picked_up', 'en_route', 'arrived'].includes(assignmentStatus || '')) return 'dispatched'
-  if (assignmentStatus === 'assigned') return 'ready'
-  if (orderStatus === 'ready' || orderStatus === 'served') return 'ready'
-  if (orderStatus === 'preparing') return 'preparing'
-  if (orderStatus === 'pending') return 'new'
-  return 'confirmed'
-}
+const views = [
+    { id: 'work', label: 'Open', includes: inProgress },
+    { id: 'dispatch', label: 'Needs a rider', includes: (row: Delivery) => stage(row) === 'unassigned' },
+    { id: 'route', label: 'On the way', includes: onTrip },
+    { id: 'exception', label: 'Issues', includes: (row: Delivery) => stage(row) === 'exception' },
+    { id: 'cash', label: 'Cash', includes: (row: Delivery) => cashToSettle(row) > 0 },
+    { id: 'delivered', label: 'Delivered', includes: (row: Delivery) => stage(row) === 'delivered' },
+] as const
 
 export default function DeliveryMonitorPage() {
-  const { restaurant } = useAuthStore()
-  const { success, error: showError } = useToast()
-  const [isLoading, setIsLoading] = useState(true)
-  const [currentTime, setCurrentTime] = useState<Date | null>(null)
-  const [deliveries, setDeliveries] = useState<ActiveDelivery[]>([])
-  const [riders, setRiders] = useState<Rider[]>([])
-  const [selectedDelivery, setSelectedDelivery] = useState<ActiveDelivery | null>(null)
-  const [showMap, setShowMap] = useState(false)
-  const [mapView, setMapView] = useState<'fleet' | 'delivery'>('fleet')
+    const { restaurant, staff, userRole } = useAuthStore()
+    return restaurant?.id
+        ? <Dispatch key={`${restaurant.id}:${staff?.id || ''}:${userRole || ''}`} restaurantId={restaurant.id} address={restaurant.address} currency={restaurant.currency || 'PKR'} />
+        : <main className={`${work.page} ${styles.page}`}><DeliveryHeader label="Delivery operations" title="Dispatch" description="Pickup, drop-off and cash handoffs." /><p className={styles.empty}>Select a restaurant to view dispatch.</p></main>
+}
 
-  // Initialize time only on client to avoid hydration mismatch
-  useEffect(() => {
-    setCurrentTime(new Date())
-    const interval = setInterval(() => setCurrentTime(new Date()), 1000)
-    return () => clearInterval(interval)
-  }, [])
+function Dispatch({ restaurantId, address, currency }: { restaurantId: string; address?: string | null; currency: string }) {
+    const feed = useDeliveries(restaurantId)
+    const roster = useRiderRoster(restaurantId)
+    const [view, setView] = useState<(typeof views)[number]['id']>('work')
+    const [query, setQuery] = useState('')
+    const [selectedId, setSelectedId] = useState<string>()
+    const [riderId, setRiderId] = useState('')
+    const [map, setMap] = useState<'fleet' | 'route'>()
+    const [restaurantPoint, setRestaurantPoint] = useState<ReturnType<typeof point>>()
+    const [dropPoint, setDropPoint] = useState<ReturnType<typeof point>>()
+    const [reconciling, setReconciling] = useState(false)
+    const [pending, setPending] = useState(false)
+    const [actionError, setActionError] = useState('')
+    const [success, setSuccess] = useState('')
+    const updating = useRef(false)
+    const detail = useRef<HTMLElement>(null)
+    const deliveries = feed.data?.deliveries ?? []
+    const riders = roster.data?.riders ?? []
+    const active = deliveries.filter(inProgress)
+    const busyRiders = new Set(active.map(row => row.rider_id))
+    const available = riders.filter(rider => rider.is_active && !busyRiders.has(rider.id))
+    const recentPositions = riders.flatMap(rider => {
+        const location = roster.data?.locations.get(rider.id)
+        if (!location || !rider.is_active || roster.error || locationState(location, Date.now()) !== 'Recent GPS') return []
+        const position = point(location.latitude, location.longitude)
+        return position ? [{ id: rider.id, name: rider.name, position, status: busyRiders.has(rider.id) ? 'busy' as const : 'available' as const }] : []
+    })
+    const filtered = deliveries.filter(views.find(item => item.id === view)!.includes).filter(row => {
+        const rider = riders.find(item => item.id === row.rider_id)
+        return [orderLabel(row), row.customer_name, row.delivery_address, rider?.name].some(value => value?.toLowerCase().includes(query.trim().toLowerCase()))
+    })
+    const selected = deliveries.find(row => row.id === selectedId)
+    const assigned = riders.find(rider => rider.id === selected?.rider_id)
+    const canManage = ['owner', 'manager'].includes(feed.data?.role || '')
+    const canReconcile = canManage || feed.data?.role === 'cashier'
+    const riderPhone = phoneLink(assigned?.phone)
+    const cashTotal = deliveries.reduce((sum, row) => sum + cashToSettle(row), 0)
+    const canMap = Boolean(process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY)
+    const mapAddress = map && canMap && (map === 'fleet' || !point(selected?.pickup_lat, selected?.pickup_lng)) ? address : undefined
+    const dropAddress = map === 'route' && canMap && !point(selected?.delivery_lat, selected?.delivery_lng) ? selected?.delivery_address : undefined
 
-  // Default restaurant location (fallback to center of major cities)
-  const restaurantLocation = useMemo(() => {
-    // Parse from restaurant settings or use defaults
-    if (restaurant?.address) {
-      // TODO: Geocode address to lat/lng
+    useEffect(() => {
+        if (!mapAddress) return
+        const request = new AbortController()
+        void geocode(mapAddress, request.signal).then(position => { if (!request.signal.aborted) setRestaurantPoint(position) })
+        return () => { request.abort(); setRestaurantPoint(undefined) }
+    }, [mapAddress])
+
+    useEffect(() => {
+        if (!dropAddress) return
+        const request = new AbortController()
+        void geocode(dropAddress, request.signal).then(position => { if (!request.signal.aborted) setDropPoint(position) })
+        return () => { request.abort(); setDropPoint(undefined) }
+    }, [dropAddress])
+
+    const pickupLat = selected?.pickup_lat
+    const pickupLng = selected?.pickup_lng
+    const pickup = useMemo(() => point(pickupLat, pickupLng) || restaurantPoint, [pickupLat, pickupLng, restaurantPoint])
+    const dropLat = selected?.delivery_lat
+    const dropLng = selected?.delivery_lng
+    const destination = useMemo(() => point(dropLat, dropLng) || dropPoint, [dropLat, dropLng, dropPoint])
+    const fleetCenter = restaurantPoint
+    const riderPosition = recentPositions.find(rider => rider.id === selected?.rider_id)?.position
+
+    function select(row: Delivery) {
+        setSelectedId(row.id)
+        setRiderId('')
+        setActionError('')
+        setMap(current => current === 'route' ? undefined : current)
+        requestAnimationFrame(() => {
+            if (window.matchMedia('(max-width: 959px)').matches) detail.current?.focus()
+        })
     }
-    // Default to Karachi, Pakistan
-    return { lat: 24.8607, lng: 67.0011 }
-  }, [restaurant])
 
-  // Get rider locations for fleet map
-  const riderLocations = useMemo(() => {
-    return riders
-      .filter(r => r.location)
-      .map(r => ({
-        id: r.id,
-        name: r.name,
-        position: r.location!,
-        status: r.status as 'available' | 'busy' | 'offline'
-      }))
-  }, [riders])
-
-  const loadDeliveryData = useCallback(async () => {
-    if (!restaurant?.id) return
-    setIsLoading(true)
-    const supabase = createClient()
-
-    try {
-      // Query delivery assignments without nested selects first
-      const assignmentsResult = await supabase
-        .from('delivery_assignments')
-        .select('*')
-        .eq('restaurant_id', restaurant.id)
-        .order('created_at', { ascending: false })
-
-      // Valid restaurant ID check
-      if (!restaurant?.id || typeof restaurant.id !== 'string' || restaurant.id.length < 10) {
-        setIsLoading(false)
-        return
-      }
-
-      // Query all active staff (with phone for delivery)
-      const ridersResult = await supabase
-        .from('staff')
-        .select('id, name, role')
-        .eq('restaurant_id', restaurant.id)
-
-      // Query rider locations (only select columns we know exist)
-      const locationsResult = await supabase
-        .from('rider_locations')
-        .select('rider_id, is_online, latitude, longitude')
-        .eq('restaurant_id', restaurant.id)
-
-      // Handle errors gracefully - just log them
-      if (assignmentsResult.error) console.warn('Assignments query error:', assignmentsResult.error.message)
-      if (ridersResult.error) console.warn('Riders query error:', ridersResult.error.message)
-
-      const activeAssignments = (assignmentsResult.data || []) as any[]
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const busyRiderIds = new Set(activeAssignments.filter((assignment: any) => !['delivered', 'cancelled'].includes(assignment.status || '')).map((assignment: any) => assignment.rider_id).filter(Boolean))
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const locationByRider = new Map((locationsResult.data || []).map((location: any) => [location.rider_id, location]))
-
-      // Build rider lookup map
-      const riderMap = new Map((ridersResult.data || []).map((r: any) => [r.id, r]))
-
-      setDeliveries(activeAssignments
-        .filter((a: any) => a.status !== 'cancelled')
-        .map((assignment: any) => {
-          const rider = assignment.rider_id ? riderMap.get(assignment.rider_id) as any : null
-          const eta = assignment.estimated_delivery_time
-            ? Math.max(0, Math.ceil((new Date(assignment.estimated_delivery_time).getTime() - Date.now()) / 60000))
-            : 0
-
-          return {
-            id: assignment.id,
-            orderNumber: assignment.order_id ? parseInt(assignment.order_id.slice(-4), 16) % 10000 : 0,
-            customerName: assignment.customer_name || 'Customer',
-            customerPhone: assignment.customer_phone || '',
-            address: assignment.delivery_address || '',
-            status: normalizeDeliveryStatus(assignment.status),
-            rider: rider ? {
-              id: rider.id,
-              name: rider.name,
-              phone: 'Contact via phone',
-              status: busyRiderIds.has(rider.id) ? 'busy' : 'online',
-            } : null,
-            items: 0,
-            total: 0,
-            createdAt: assignment.created_at,
-            eta,
-          }
-        }))
-
-    setRiders((ridersResult.data || []).map((rider: any) => {
-      const location = locationByRider.get(rider.id) as any
-      return {
-        id: rider.id,
-        name: rider.name,
-        phone: 'No phone', // Not selected, always fallback
-        status: busyRiderIds.has(rider.id) ? 'busy' : location?.is_online ? 'online' : 'offline',
-        activeDeliveries: activeAssignments.filter((assignment: any) => assignment.rider_id === rider.id && !['delivered', 'cancelled'].includes(assignment.status)).length,
-        location: location ? { lat: Number(location.latitude), lng: Number(location.longitude) } : undefined,
-      }
-    }))
-
-      setIsLoading(false)
-    } catch (err) {
-      console.error('Failed to load delivery data:', err)
-      showError('Error', 'Failed to load delivery data')
-      setIsLoading(false)
-    }
-  }, [restaurant?.id, showError])
-
-  // Initial data load
-  useEffect(() => {
-    loadDeliveryData()
-  }, [loadDeliveryData])
-
-  // Realtime subscription for live updates
-  useEffect(() => {
-    if (!restaurant?.id || isLoading) return
-
-    const supabase = createClient()
-
-    // Subscribe to delivery assignments changes
-    const channel = supabase
-      .channel('delivery-monitor')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'delivery_assignments',
-          filter: `restaurant_id=eq.${restaurant.id}`
-        },
-        (payload: any) => {
-          console.log('Delivery update:', payload)
-          // Refresh data on any change
-          loadDeliveryData()
+    async function update(status: 'assigned' | 'reconcile_cash') {
+        if (!selected || updating.current || feed.error) return
+        if (status === 'assigned' && (roster.error || !available.some(rider => rider.id === riderId))) return
+        updating.current = true
+        setPending(true)
+        setActionError('')
+        setSuccess('')
+        try {
+            await deliveryAction(selected.id, status, status === 'assigned' ? { riderId } : undefined)
+            setSuccess(status === 'assigned' ? `${orderLabel(selected)} assigned.` : `Cash handoff recorded for ${orderLabel(selected)}.`)
+            setReconciling(false)
+            setRiderId('')
+            await feed.refresh()
+        } catch (failure) {
+            setActionError(failure instanceof Error ? failure.message : 'Could not save the handoff.')
+            await feed.refresh()
+        } finally {
+            updating.current = false
+            setPending(false)
         }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'rider_locations',
-          filter: `restaurant_id=eq.${restaurant.id}`
-        },
-        (payload: any) => {
-          console.log('Rider location update:', payload)
-          // Refresh data on location update
-          loadDeliveryData()
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [restaurant?.id, isLoading, loadDeliveryData])
-
-  // Stats
-  const stats = useMemo(() => ({
-    totalActive: deliveries.filter(d => d.status !== 'delivered').length,
-    inKitchen: deliveries.filter(d => ['new', 'confirmed', 'preparing'].includes(d.status)).length,
-    readyForPickup: deliveries.filter(d => d.status === 'ready').length,
-    outForDelivery: deliveries.filter(d => d.status === 'dispatched').length,
-    avgDeliveryTime: 28,
-    ridersOnline: riders.filter(r => r.status === 'online').length,
-    ridersBusy: riders.filter(r => r.status === 'busy').length,
-  }), [deliveries, riders])
-
-  const getElapsedTime = (createdAt: string) => {
-    if (!currentTime) return 0
-    return Math.floor((currentTime.getTime() - new Date(createdAt).getTime()) / 60000)
-  }
-
-  const assignRider = async (deliveryId: string, riderId: string) => {
-    const rider = riders.find(r => r.id === riderId)
-    if (!rider) return
-
-    const supabase = createClient()
-    const { error } = await supabase
-      .from('delivery_assignments')
-      .update({
-        rider_id: riderId,
-        status: 'assigned',
-      })
-      .eq('id', deliveryId)
-
-    if (error) {
-      showError('Assignment Failed', error.message)
-      return
     }
 
-    setDeliveries(prev => prev.map(d =>
-      d.id === deliveryId
-        ? { ...d, rider: { id: rider.id, name: rider.name, phone: 'No phone', status: 'busy' as RiderStatus }, status: 'dispatched' as DeliveryStatus, eta: 30 }
-        : d
-    ))
-
-    setRiders(prev => prev.map(r =>
-      r.id === riderId
-        ? { ...r, status: 'busy' as RiderStatus, activeDeliveries: r.activeDeliveries + 1 }
-        : r
-    ))
-
-    success('Rider Assigned', `${rider.name} is now delivering order #${deliveries.find(d => d.id === deliveryId)?.orderNumber}`)
-    setSelectedDelivery(null)
-  }
-
-  const container = {
-    hidden: { opacity: 0 },
-    show: { opacity: 1, transition: { staggerChildren: 0.05 } }
-  }
-
-  const itemVariant = {
-    hidden: { opacity: 0, y: 20 },
-    show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 100 } }
-  }
-
-  return (
-    <div className="min-h-screen pb-20">
-      <motion.div variants={container} initial="hidden" animate="show" className="space-y-8">
-
-        {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
-          <div className="space-y-3">
-            <motion.div variants={itemVariant} className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-purple-600 to-purple-800 rounded-xl flex items-center justify-center shadow-purple-600/30">
-                <Activity className="w-5 h-5 text-[var(--text-primary)]" />
-              </div>
-              <Badge variant="outline" className="border-brand/20 text-brand bg-purple-600/5 px-3 py-1 font-bold uppercase tracking-widest text-[10px]">
-                REAL-TIME
-              </Badge>
-            </motion.div>
-            <motion.h1 variants={itemVariant} className="text-4xl lg:text-6xl font-display font-bold text-[var(--text-primary)] tracking-tight uppercase">
-              Delivery <span className="text-brand">Monitor</span>
-            </motion.h1>
-            <motion.p variants={itemVariant} className="text-[var(--text-muted)] text-lg font-medium">
-              Live overview of all active deliveries and rider status
-            </motion.p>
-          </div>
-
-          <motion.div variants={itemVariant} className="flex items-center gap-4">
-            <Button
-              variant={showMap ? 'primary' : 'outline'}
-              className={cn(
-                "h-12 px-6 rounded-xl font-bold uppercase tracking-widest text-[10px]",
-                showMap ? "bg-purple-600 hover:bg-purple-500" : "border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-              )}
-              onClick={() => setShowMap(!showMap)}
-            >
-              <MapIcon className="w-4 h-4 mr-2" />
-              {showMap ? 'Hide Map' : 'Show Map'}
-            </Button>
-            <div className="bg-[var(--surface)] px-6 py-3 rounded-2xl border border-[var(--border)] flex items-center gap-3">
-              <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-              <span className="text-sm font-bold text-[var(--text-primary)] tabular-nums">
-                {currentTime ? currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '--:--:--'}
-              </span>
-            </div>
-            <Button
-              variant="outline"
-              className="h-12 px-6 rounded-xl border-[var(--border)] text-[var(--text-muted)] font-bold uppercase tracking-widest text-[10px] hover:text-[var(--text-primary)]"
-            >
-              <RefreshCw className="w-4 h-4 mr-2" />
-              Refresh
-            </Button>
-          </motion.div>
-        </div>
-
-        {/* Stats Grid */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
-          {[
-            { label: 'Active Orders', value: stats.totalActive, icon: Package, color: 'text-[var(--text-primary)]', accent: 'bg-white/5' },
-            { label: 'In Kitchen', value: stats.inKitchen, icon: ChefHat, color: 'text-brand', accent: 'bg-brand-subtle' },
-            { label: 'Ready', value: stats.readyForPickup, icon: CheckCircle2, color: 'text-emerald-500', accent: 'bg-emerald-500/10' },
-            { label: 'Out for Delivery', value: stats.outForDelivery, icon: Truck, color: 'text-brand', accent: 'bg-brand-subtle' },
-            { label: 'Avg Time', value: `${stats.avgDeliveryTime}m`, icon: Timer, color: 'text-blue-500', accent: 'bg-blue-500/10' },
-            { label: 'Available Riders', value: stats.ridersOnline, icon: User, color: 'text-emerald-500', accent: 'bg-emerald-500/10' },
-            { label: 'Busy Riders', value: stats.ridersBusy, icon: Navigation, color: 'text-brand', accent: 'bg-brand-subtle' },
-          ].map((stat, idx) => (
-            <motion.div key={idx} variants={itemVariant}>
-              <Card className={cn("p-4 bg-[var(--background)] border-[var(--surface-raised)] hover:border-[var(--border)] transition-all rounded-2xl", stat.accent)}>
-                <div className="flex items-center gap-3">
-                  <stat.icon className={cn("w-5 h-5", stat.color)} />
-                  <div>
-                    <p className="text-[8px] font-bold text-[var(--text-muted)] uppercase tracking-widest">{stat.label}</p>
-                    <h3 className="text-xl font-black text-[var(--text-primary)]">{stat.value}</h3>
-                  </div>
-                </div>
-              </Card>
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Map Section */}
-        {showMap && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="space-y-4"
-          >
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-[var(--text-primary)] uppercase tracking-widest">Live Map</h2>
-              <div className="flex gap-2">
-                <Button
-                  variant={mapView === 'fleet' ? 'primary' : 'outline'}
-                  size="sm"
-                  className={cn(
-                    "h-8 px-4 rounded-lg text-[10px] font-bold uppercase tracking-widest",
-                    mapView === 'fleet' ? "bg-purple-600" : "border-[var(--border)] text-[var(--text-muted)]"
-                  )}
-                  onClick={() => setMapView('fleet')}
-                >
-                  Fleet View
-                </Button>
-                <Button
-                  variant={mapView === 'delivery' && selectedDelivery ? 'primary' : 'outline'}
-                  size="sm"
-                  className={cn(
-                    "h-8 px-4 rounded-lg text-[10px] font-bold uppercase tracking-widest",
-                    mapView === 'delivery' && selectedDelivery ? "bg-purple-600" : "border-[var(--border)] text-[var(--text-muted)]"
-                  )}
-                  onClick={() => setMapView('delivery')}
-                  disabled={!selectedDelivery}
-                >
-                  Delivery View
-                </Button>
-              </div>
-            </div>
-
-            {mapView === 'fleet' ? (
-              <Card className="p-2 bg-[var(--background)] border-[var(--surface-raised)] rounded-2xl overflow-hidden">
-                <div className="h-[400px]">
-                  <FleetMap
-                    restaurantLocation={restaurantLocation}
-                    riders={riderLocations}
-                    onRiderClick={(rider) => {
-                      // Find delivery for this rider
-                      const delivery = deliveries.find(d => d.rider?.id === rider.id)
-                      if (delivery) {
-                        setSelectedDelivery(delivery)
-                        setMapView('delivery')
-                      }
-                    }}
-                    className="h-full"
-                  />
-                </div>
-              </Card>
-            ) : selectedDelivery ? (
-              <Card className="p-2 bg-[var(--background)] border-[var(--surface-raised)] rounded-2xl overflow-hidden">
-                <div className="h-[400px]">
-                  <LiveTrackingMap
-                    restaurantLocation={restaurantLocation}
-                    customerLocation={restaurantLocation} // TODO: Geocode customer address
-                    riderLocation={riders.find(r => r.id === selectedDelivery.rider?.id)?.location}
-                    riderName={selectedDelivery.rider?.name}
-                    showRoute={true}
-                    className="h-full"
-                  />
-                </div>
-              </Card>
-            ) : (
-              <Card className="p-8 bg-[var(--background)] border-[var(--surface-raised)] rounded-2xl text-center">
-                <MapPin className="w-12 h-12 text-[var(--text-muted)] mx-auto mb-4" />
-                <p className="text-[var(--text-muted)]">Select a delivery to view live tracking</p>
-              </Card>
-            )}
-          </motion.div>
-        )}
-
-        {/* Main Content */}
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          {/* Active Deliveries */}
-          <div className="xl:col-span-2 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-[var(--text-primary)] uppercase tracking-widest">Active Deliveries</h2>
-              <Badge className="bg-brand-subtle text-brand border-brand/20 px-3 py-1">
-                {stats.totalActive} orders
-              </Badge>
-            </div>
-
-            {isLoading ? (
-              <div className="flex justify-center py-20"><LoadingSpinner /></div>
-            ) : (
-              <div className="space-y-3">
-                {deliveries.filter(d => d.status !== 'delivered').map((delivery) => {
-                  const statusCfg = statusConfig[delivery.status]
-                  const elapsed = getElapsedTime(delivery.createdAt)
-                  const isLate = elapsed > 30
-
-                  return (
-                    <motion.div key={delivery.id} variants={itemVariant} layout>
-                      <Card className={cn(
-                        "p-5 bg-[var(--background)] border-[var(--surface-raised)] hover:border-[var(--border)] transition-all rounded-2xl cursor-pointer group",
-                        isLate && "border-l-4 border-l-rose-500"
-                      )} onClick={() => setSelectedDelivery(delivery)}>
-                        <div className="flex items-center gap-6">
-                          {/* Order Number */}
-                          <div className="w-16 h-16 shrink-0 rounded-2xl bg-[var(--surface)] border border-[var(--border)] flex items-center justify-center group-hover:border-brand/30 transition-colors">
-                            <span className="text-xl font-black text-[var(--text-primary)]">#{delivery.orderNumber}</span>
-                          </div>
-
-                          {/* Customer Info */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-3 mb-2">
-                              <h3 className="font-bold text-[var(--text-primary)] truncate">{delivery.customerName}</h3>
-                              <Badge className={cn("px-2 py-0.5 text-[9px] font-black uppercase tracking-widest border-none", statusCfg.bg, statusCfg.color)}>
-                                {statusCfg.label}
-                              </Badge>
-                              {isLate && (
-                                <Badge className="bg-rose-500/10 text-rose-500 border-none px-2 py-0.5 text-[9px] font-black">
-                                  <AlertTriangle className="w-3 h-3 mr-1" />
-                                  LATE
-                                </Badge>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-4 text-xs text-[var(--text-muted)]">
-                              <span className="flex items-center gap-1">
-                                <MapPin className="w-3 h-3" />
-                                {delivery.address}
-                              </span>
-                              <span className="flex items-center gap-1">
-                                <Package className="w-3 h-3" />
-                                {delivery.items} items
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Rider / Time Info */}
-                          <div className="text-right shrink-0">
-                            {delivery.rider ? (
-                              <div>
-                                <p className="text-sm font-bold text-purple-400">{delivery.rider.name}</p>
-                                <p className="text-xs text-[var(--text-muted)]">ETA: {delivery.eta} min</p>
-                              </div>
-                            ) : (
-                              <div>
-                                <p className="text-sm font-bold text-brand">No Rider</p>
-                                <p className="text-xs text-[var(--text-muted)]">{elapsed}m ago</p>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Amount */}
-                          <div className="shrink-0 text-right">
-                            <p className="text-lg font-black text-[var(--text-primary)] tabular-nums">Rs.{delivery.total}</p>
-                          </div>
-
-                          <Eye className="w-5 h-5 text-[var(--text-muted)] group-hover:text-brand transition-colors shrink-0" />
+    return <main className={`${work.page} ${styles.page}`}>
+        <DeliveryHeader label="Delivery operations" title="Dispatch" description="Assign pickups, follow drop-offs and reconcile cash.">
+            <LastSync at={feed.syncedAt} />
+            <Link className={work.secondary} href="/dashboard/riders"><Bike size={16} aria-hidden="true" /> Riders</Link>
+            {canMap && <button type="button" className={work.secondary} aria-pressed={map === 'fleet'} onClick={() => setMap(map === 'fleet' ? undefined : 'fleet')}><Map size={16} aria-hidden="true" /> Fleet map</button>}
+            <RefreshDeliveries busy={feed.loading || roster.loading} onClick={() => { void feed.refresh(); void roster.refresh() }} />
+        </DeliveryHeader>
+        <dl className={styles.summary}>
+            <div><dt>Needs a rider</dt><dd>{feed.data ? deliveries.filter(views[1].includes).length : '—'}</dd></div>
+            <div><dt>On the way</dt><dd>{feed.data ? deliveries.filter(onTrip).length : '—'}</dd></div>
+            <div><dt>Issues reported</dt><dd>{feed.data ? deliveries.filter(views[3].includes).length : '—'}</dd></div>
+            <div><dt>Cash to reconcile</dt><dd>{feed.data ? money(cashTotal, currency) : '—'}</dd></div>
+        </dl>
+        <div className={styles.stack}>
+            <DeliveryNotice {...feed} />
+            {roster.error && <p className={styles.alert} role="alert">{roster.error} Rider assignment is paused until the roster refreshes.</p>}
+            {success && <p className={styles.success} role="status">{success}</p>}
+            {map === 'fleet' && <section className={work.panel} aria-label="Fleet map">
+                <div className={work.panelHead}><div><h2>Fleet map</h2><p>{recentPositions.length} riders with recent GPS</p></div></div>
+                {fleetCenter ? <FleetMap restaurantLocation={fleetCenter} riders={recentPositions} className={styles.map} />
+                    : <p className={styles.empty}>{roster.data?.locationError ? 'Rider locations could not be loaded.' : 'A confirmed restaurant location is required to show the fleet map.'}</p>}
+            </section>}
+            <div className={styles.split}>
+                <section className={work.panel} aria-label="Dispatch queue">
+                    <div className={work.panelHead}><div><h2>Delivery queue</h2><p>Choose an order to review the handoff.</p></div></div>
+                    <div className={styles.toolbar}>
+                        <SearchField value={query} onChange={setQuery} placeholder="Search by order, customer, address or rider" />
+                        <div className={work.filters} aria-label="Delivery filters">
+                            {views.map(item => <button key={item.id} type="button" disabled={pending} aria-pressed={view === item.id} onClick={() => setView(item.id)}>
+                                {item.label}{feed.data && <span className={work.countBadge}>{deliveries.filter(item.includes).length}</span>}
+                            </button>)}
                         </div>
-                      </Card>
-                    </motion.div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Rider Status Panel */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-[var(--text-primary)] uppercase tracking-widest">Rider Fleet</h2>
-              <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 px-3 py-1">
-                {stats.ridersOnline} available
-              </Badge>
-            </div>
-
-            <Card className="p-0 bg-[var(--background)] border-[var(--surface-raised)] rounded-2xl overflow-hidden divide-y divide-[var(--surface-raised)]">
-              {riders.map((rider) => (
-                <div key={rider.id} className="p-4 flex items-center gap-4 hover:bg-[var(--surface-raised)]/50 transition-colors">
-                  <div className="relative">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-600 to-purple-800 flex items-center justify-center text-[var(--text-primary)] font-bold text-lg">
-                      {rider.name.charAt(0)}
                     </div>
-                    <div className={cn(
-                      "absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-[var(--background)]",
-                      rider.status === 'online' ? 'bg-emerald-500' :
-                        rider.status === 'busy' ? 'bg-purple-500' : 'bg-[var(--surface-active)]'
-                    )} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-bold text-[var(--text-primary)] truncate">{rider.name}</h3>
-                    <p className="text-xs text-[var(--text-muted)]">{rider.phone}</p>
-                  </div>
-                  <div className="text-right">
-                    <Badge className={cn(
-                      "px-2 py-0.5 text-[9px] font-black uppercase tracking-widest border-none",
-                      rider.status === 'online' ? 'bg-emerald-500/10 text-emerald-500' :
-                        rider.status === 'busy' ? 'bg-brand-subtle text-brand' : 'bg-[var(--surface-active)] text-[var(--text-muted)]'
-                    )}>
-                      {rider.status === 'busy' ? `${rider.activeDeliveries} active` : rider.status}
-                    </Badge>
-                  </div>
-                </div>
-              ))}
-            </Card>
-
-            {/* Quick Stats */}
-            <Card className="p-6 bg-gradient-to-br from-purple-600/10 to-purple-800/5 border-brand/20 rounded-2xl">
-              <div className="flex items-center gap-4 mb-4">
-                <TrendingUp className="w-6 h-6 text-brand" />
-                  <h3 className="font-bold text-[var(--text-primary)] uppercase tracking-widest text-sm">Today&apos;s Performance</h3>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1">Completed</p>
-                  <p className="text-2xl font-black text-[var(--text-primary)]">24</p>
-                </div>
-                <div>
-                  <p className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1">On Time</p>
-                  <p className="text-2xl font-black text-emerald-500">92%</p>
-                </div>
-              </div>
-            </Card>
-          </div>
+                    <ul className={styles.rows}>
+                        {filtered.map(row => <li key={row.id}><button type="button" className={styles.row} aria-pressed={selectedId === row.id} disabled={pending} onClick={() => select(row)}>
+                            <span className={styles.tile}><Package size={17} aria-hidden="true" /></span>
+                            <span className={styles.rowText}><strong>{orderLabel(row)} · {row.customer_name || 'Customer'}</strong>
+                                <small>{row.delivery_address || 'Address unavailable'}</small></span>
+                            <span className={styles.rowEnd}><DeliveryBadge delivery={row} /><small>{timeLabel(row.created_at)}</small></span>
+                        </button></li>)}
+                    </ul>
+                    {feed.data && !filtered.length && <p className={styles.empty}>{query.trim() ? 'No deliveries match your search.' : 'No deliveries in this view.'}</p>}
+                </section>
+                {selected ? <section key={selected.id} ref={detail} tabIndex={-1} className={`${work.panel} ${work.receipt} ${styles.detail}`} aria-label={orderLabel(selected)}>
+                    <div className={work.panelHead}><div><p className={styles.label}>Dispatch ticket</p><h2>{orderLabel(selected)}</h2></div><DeliveryBadge delivery={selected} /></div>
+                    <div className={`${work.panelBody} ${styles.stack}`}>
+                        <DropOff delivery={selected} />
+                        <dl className={styles.meta}>
+                            <div><dt>Rider</dt><dd>{assigned?.name || (selected.rider_id ? 'Assigned rider' : 'Unassigned')}</dd></div>
+                            {selected.order && <div><dt>Order total</dt><dd>{money(Number(selected.order.total), currency)}</dd></div>}
+                            {selected.cod_collected_at && <div><dt>{selected.cod_settled ? 'Cash reconciled' : 'Cash held by rider'}</dt><dd>{money(Number(selected.cod_amount_collected || 0), currency)}</dd></div>}
+                        </dl>
+                        {lineItems(selected).length > 0 && <details><summary>Order items</summary><ul className={work.lines}>{lineItems(selected).map((item, index) => <li key={index}>{item.quantity} × {item.name}</li>)}</ul></details>}
+                        {selected.cancel_reason && <p className={styles.alert}>{selected.cancel_reason}</p>}
+                        {actionError && !reconciling && <p className={styles.alert} role="alert">{actionError}</p>}
+                        {canManage && selected.status === 'pending_dispatch' && stage(selected) === 'unassigned' && <>
+                            <label className={work.field}>Assign a rider
+                                <select value={riderId} onChange={event => setRiderId(event.target.value)} disabled={pending || !!roster.error || !available.length}>
+                                    <option value="">{available.length ? 'Choose an available rider' : 'No enabled riders free'}</option>
+                                    {available.map(rider => <option key={rider.id} value={rider.id}>{rider.name} · {roster.data?.locationError ? 'GPS unavailable' : locationState(roster.data?.locations.get(rider.id), Date.now())}</option>)}
+                                </select>
+                            </label>
+                            <button type="button" className={work.primary} disabled={pending || !!feed.error || !!roster.error || !available.some(rider => rider.id === riderId)} onClick={() => void update('assigned')}>{pending ? 'Assigning…' : 'Assign rider'}</button>
+                        </>}
+                        <div className={styles.actions}>
+                            {riderPhone && <a href={riderPhone} className={work.secondary}><Phone size={15} aria-hidden="true" /> Call rider</a>}
+                            {canMap && <button type="button" className={work.secondary} aria-expanded={map === 'route'} onClick={() => setMap(map === 'route' ? undefined : 'route')}>Route map</button>}
+                            {canReconcile && cashToSettle(selected) > 0 && <button type="button" className={work.primary} disabled={pending || !!feed.error} onClick={() => { setActionError(''); setReconciling(true) }}>Reconcile cash</button>}
+                        </div>
+                        {map === 'route' && (pickup && destination
+                            ? <LiveTrackingMap key={selected.id} restaurantLocation={pickup} customerLocation={destination} riderLocation={riderPosition} riderName={assigned?.name} className={styles.map} />
+                            : <p className={styles.empty}>The route map needs a confirmed pickup and drop-off location.</p>)}
+                    </div>
+                </section> : <aside className={styles.empty}>Select a delivery to see its address, rider and cash details.</aside>}
+            </div>
         </div>
-
-        {/* Delivery Detail Modal */}
-        <Modal
-          isOpen={!!selectedDelivery}
-          onClose={() => setSelectedDelivery(null)}
-          title={`ORDER #${selectedDelivery?.orderNumber}`}
-          size="lg"
-        >
-          {selectedDelivery && (
-            <div className="space-y-6 p-2">
-              {/* Status */}
-              <div className="text-center py-6">
-                <Badge className={cn(
-                  "px-4 py-2 text-sm font-black uppercase tracking-widest border-none",
-                  statusConfig[selectedDelivery.status].bg,
-                  statusConfig[selectedDelivery.status].color
-                )}>
-                  {statusConfig[selectedDelivery.status].label}
-                </Badge>
-              </div>
-
-              {/* Customer Info */}
-              <div className="p-5 bg-[var(--surface)] rounded-2xl border border-[var(--surface-raised)] space-y-4">
-                <div className="flex items-center gap-4">
-                  <User className="w-5 h-5 text-brand" />
-                  <div>
-                    <p className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Customer</p>
-                    <p className="font-bold text-[var(--text-primary)]">{selectedDelivery.customerName}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <Phone className="w-5 h-5 text-brand" />
-                  <div>
-                    <p className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Phone</p>
-                    <p className="font-bold text-[var(--text-primary)]">{selectedDelivery.customerPhone}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <MapPin className="w-5 h-5 text-brand" />
-                  <div>
-                    <p className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Address</p>
-                    <p className="font-bold text-[var(--text-primary)]">{selectedDelivery.address}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Assign Rider */}
-              {selectedDelivery.status === 'ready' && !selectedDelivery.rider && (
-                <div className="space-y-3">
-                  <h4 className="text-sm font-bold text-[var(--text-primary)] uppercase tracking-widest">Assign Rider</h4>
-                  <div className="grid grid-cols-2 gap-3">
-                    {riders.filter(r => r.status === 'online').map((rider) => (
-                      <Button
-                        key={rider.id}
-                        variant="outline"
-                        className="h-16 rounded-xl border-[var(--border)] hover:border-brand/50 flex flex-col items-center justify-center gap-1"
-                        onClick={() => assignRider(selectedDelivery.id, rider.id)}
-                      >
-                        <span className="font-bold text-[var(--text-primary)]">{rider.name}</span>
-                        <span className="text-xs text-emerald-500">Available</span>
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Current Rider */}
-              {selectedDelivery.rider && (
-                <div className="p-5 bg-brand-subtle border border-brand/20 rounded-2xl">
-                  <div className="flex items-center gap-4">
-                    <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-purple-600 to-purple-800 flex items-center justify-center text-[var(--text-primary)] font-bold text-xl">
-                      {selectedDelivery.rider.name.charAt(0)}
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-bold text-[var(--text-primary)]">{selectedDelivery.rider.name}</p>
-                      <p className="text-sm text-[var(--text-muted)]">{selectedDelivery.rider.phone}</p>
-                    </div>
-                    <Button className="h-12 px-6 bg-purple-600 hover:bg-purple-500 text-[var(--text-primary)] rounded-xl font-bold uppercase tracking-widest text-[10px]">
-                      <Phone className="w-4 h-4 mr-2" />
-                      Call
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {/* Close Button */}
-              <Button
-                variant="outline"
-                className="w-full h-14 rounded-xl border-[var(--border)] text-[var(--text-muted)] font-bold uppercase tracking-widest text-xs"
-                onClick={() => setSelectedDelivery(null)}
-              >
-                Close
-              </Button>
+        {reconciling && selected && <ReviewDialog title="Record the cash handoff" subtitle={orderLabel(selected)} busy={pending} onClose={() => setReconciling(false)}>
+            <div className={styles.stack}>
+                <p>Confirm only after you have received this cash from {assigned?.name || 'the rider'}.</p>
+                <div className={styles.cash}><span>Cash received</span><strong>{money(cashToSettle(selected), currency)}</strong></div>
+                {actionError && <p className={styles.alert} role="alert">{actionError}</p>}
+                <button type="button" className={work.primary} disabled={pending || !!feed.error || cashToSettle(selected) <= 0} onClick={() => void update('reconcile_cash')}>{pending ? 'Recording…' : 'Confirm cash received'}</button>
             </div>
-          )}
-        </Modal>
-      </motion.div>
-    </div>
-  )
+        </ReviewDialog>}
+    </main>
+}
+
+async function geocode(address: string, signal: AbortSignal) {
+    try {
+        const response = await fetch(`/api/geocode?address=${encodeURIComponent(address)}`, { signal })
+        if (!response.ok) return
+        const data = await response.json()
+        return point(data.lat, data.lng)
+    } catch { return undefined }
 }

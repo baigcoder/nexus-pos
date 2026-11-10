@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { getAuthenticatedStaff } from '@/lib/api-auth'
 
 const OPENROUTER_API_URL = process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_API_KEY = process.env.OPEN_ROUTER_API_KEY || ''
@@ -115,81 +115,21 @@ Consider traffic patterns, distance, customer location.`,
 // GET - Fetch role-specific real-time data
 export async function GET(request: NextRequest) {
     try {
-        // Support both cookie auth and header-based staff auth
-        const staffId = request.headers.get('x-staff-id')
-        const targetRestaurantIdHeader = request.headers.get('x-restaurant-id')
-
-        let supabase = await createClient()
-        let user: any = null
-        let staffData: any = null
-
-        // Try cookie auth first
-        const { data: cookieUser } = await supabase.auth.getUser()
-        user = cookieUser?.user
-
-        // If no cookie auth, use header-based staff auth
-        if (!user && staffId) {
-            const adminClient = createAdminClient()
-            const { data: staffInfo } = await adminClient
-                .from('staff')
-                .select('id, role, restaurant_id, name')
-                .eq('id', staffId)
-                .single()
-
-            if (!staffInfo) {
-                return NextResponse.json({ error: 'Staff not found' }, { status: 401 })
-            }
-
-            user = { id: staffInfo.id }
-            staffData = staffInfo
+        const auth = await getAuthenticatedStaff(request)
+        if (!auth) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
-        // If still no user, return empty data
-        if (!user) {
-            return NextResponse.json({
-                role: 'unknown',
-                targetRestaurantId: null,
-                lastUpdated: new Date().toISOString(),
-                waiter: { tables: [], myTables: [], myActiveOrders: 0, pendingBills: 0, availableTables: 0 },
-                kitchen: { queue: [], pendingCount: 0, avgPrepTimeMinutes: 0, readyToServe: 0, preparing: 0 },
-                cashier: { todayTransactions: [], pendingPayments: [], summary: { totalSales: 0, cashSales: 0, cardSales: 0, refunds: 0, transactionCount: 0, avgTransaction: 0 } },
-                delivery: { activeDeliveries: [], myDeliveries: [], pendingPickup: 0, inTransit: 0 },
-                message: 'No authentication'
-            })
+        const role = auth.role
+        const requestedRole = request.nextUrl.searchParams.get('role')
+        const isDeliveryAlias = role === 'rider' && requestedRole === 'delivery'
+        if (requestedRole !== null && requestedRole !== role && !isDeliveryAlias) {
+            return NextResponse.json({ error: 'Access denied for this dashboard role' }, { status: 403 })
         }
+        const targetRestaurantId = auth.restaurantId
+        const staffIdForQuery = auth.staffId
+        const supabase = createAdminClient()
 
-        // Get staff role and restaurant
-        if (!staffData) {
-            const adminClient = createAdminClient()
-            // First try to find by user_id (for owner login)
-            const result = await adminClient
-                .from('staff')
-                .select('id, role, restaurant_id, name')
-                .eq('user_id', user.id)
-                .single()
-
-            if (!result.data) {
-                // If not found by user_id, try by id (for staff PIN login)
-                const byIdResult = await adminClient
-                    .from('staff')
-                    .select('id, role, restaurant_id, name')
-                    .eq('id', user.id)
-                    .single()
-                staffData = byIdResult.data
-            } else {
-                staffData = result.data
-            }
-        }
-
-        const targetRestaurantId = targetRestaurantIdHeader || staffData?.restaurant_id
-        const userRole = staffData?.role
-        const staffIdForQuery = staffData?.id
-
-        if (!targetRestaurantId) {
-            return NextResponse.json({ error: 'No restaurant found' }, { status: 404 })
-        }
-
-        const role = request.nextUrl.searchParams.get('role') || userRole || 'owner'
         const today = new Date()
         today.setHours(0, 0, 0, 0)
 
@@ -402,55 +342,51 @@ export async function GET(request: NextRequest) {
             if (cashierAI) responseData.cashier.aiSuggestion = cashierAI
         }
 
-        // DELIVERY SPECIFIC DATA
-        if (role === 'delivery' || role === 'owner' || role === 'manager') {
-            const { data: deliveries } = await supabase
-                .from('delivery_tracking')
-                .select('*')
+        // Delivery workers only see their assignments. The provider receives aggregate data.
+        if (role === 'delivery' || role === 'rider' || role === 'owner' || role === 'manager') {
+            const isRider = role === 'delivery' || role === 'rider'
+            let query = supabase.from('delivery_assignments')
+                .select('id, order_id, rider_id, delivery_address, status, estimated_minutes, distance_km, actual_pickup_time, order:orders!inner(restaurant_id,status)')
                 .eq('restaurant_id', targetRestaurantId)
-                .not('status', 'in', '("delivered","failed")')
-                .order('status', { ascending: true })
+                .eq('order.restaurant_id', targetRestaurantId)
+                .not('status', 'in', '(delivered,cancelled,dispatch_exception)')
+                .order('created_at', { ascending: false })
+                .limit(100)
+            if (isRider) query = query.eq('rider_id', staffIdForQuery)
+            const { data: deliveries, error: deliveryError } = await query
+            if (deliveryError) throw deliveryError
 
-            // Get rider's own deliveries
-            const { data: myDeliveries } = await supabase
-                .from('delivery_tracking')
-                .select('*')
-                .eq('rider_id', staffIdForQuery)
-                .not('status', 'in', '("delivered","failed")')
-
-            const { data: orders } = await supabase
-                .from('orders')
-                .select('id, total, customer_name, customer_phone, delivery_address')
-                .eq('restaurant_id', targetRestaurantId)
-                .eq('order_type', 'delivery')
-                .not('status', 'in', '("paid","cancelled")')
-
-            const deliveryOrders: DeliveryOrder[] = (deliveries || []).map(d => {
-                const order = (orders || []).find(o => o.id === d.order_id)
+            const deliveryOrders: DeliveryOrder[] = (deliveries ?? []).map(assignment => {
+                const order = Array.isArray(assignment.order) ? assignment.order[0] : assignment.order
                 return {
-                    id: d.id,
-                    order_id: d.order_id,
-                    customer_address: order?.delivery_address || 'No address',
-                    status: d.status,
-                    rider_name: d.rider_id ? 'Assigned' : 'Unassigned',
-                    estimated_minutes: d.estimated_minutes,
-                    distance_km: d.distance_km,
-                    pickup_time: d.pickup_time
+                    id: assignment.id,
+                    order_id: assignment.order_id,
+                    customer_address: assignment.delivery_address || 'No address',
+                    status: assignment.status === 'assigned' && order?.status === 'ready' ? 'ready'
+                        : ['en_route', 'arrived'].includes(assignment.status) ? 'in_transit' : assignment.status,
+                    rider_name: assignment.rider_id ? 'Assigned' : 'Unassigned',
+                    estimated_minutes: assignment.estimated_minutes,
+                    distance_km: assignment.distance_km,
+                    pickup_time: assignment.actual_pickup_time,
                 }
             })
+            const pendingPickup = deliveryOrders.filter(delivery => delivery.status === 'ready').length
+            const inTransit = deliveryOrders.filter(delivery => delivery.status === 'in_transit').length
 
             responseData.delivery = {
                 activeDeliveries: deliveryOrders,
-                myDeliveries: myDeliveries || [],
-                pendingPickup: deliveryOrders.filter(d => d.status === 'ready').length,
-                inTransit: deliveryOrders.filter(d => d.status === 'in_transit').length,
-                availableRiders: 0 // Would query staff with role='delivery'
+                myDeliveries: deliveryOrders.filter((_, index) => deliveries?.[index].rider_id === staffIdForQuery),
+                pendingPickup,
+                inTransit,
+                availableRiders: 0,
             }
 
-            // AI analysis for delivery
-            const deliveryAI = await getAIAnalysis('delivery', deliveryOrders)
+            const deliveryAI = await getAIAnalysis('delivery', {
+                active: deliveryOrders.length, pendingPickup, inTransit,
+            })
             if (deliveryAI) responseData.delivery.aiSuggestion = deliveryAI
         }
+
 
         // MANAGER OVERVIEW
         if (role === 'manager' || role === 'owner') {

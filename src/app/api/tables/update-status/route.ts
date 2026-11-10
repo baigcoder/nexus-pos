@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
             .from('tables')
             .select('id, status, table_number, restaurant_id')
             .eq('id', tableId)
+            .eq('restaurant_id', auth.restaurantId)
             .single()
 
         if (fetchError || !table) {

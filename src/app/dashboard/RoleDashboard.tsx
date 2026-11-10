@@ -1,17 +1,18 @@
 'use client'
 
 import { useState } from 'react'
-import { useAuthStore, useUserRole } from '@/stores/auth-store'
+import { hasPermission, useAuthStore, useRestaurantId, useUserRole } from '@/stores/auth-store'
 import { motion } from 'framer-motion'
 import {
-    LayoutDashboard, Users, BarChart3, ClipboardList, ChefHat, Truck,
-    Receipt, Activity, Clock, TrendingUp, DollarSign, Star, RefreshCw,
-    ShoppingBag, MapPin, Calendar, ChevronRight, ArrowUpRight, ArrowDownRight,
-    Zap, Table2, Percent, Wallet,
+    ClipboardList, ChefHat, Truck, Plus,
+    Receipt, Clock, DollarSign, RefreshCw,
+    MapPin, ChevronRight, ArrowUpRight, ArrowDownRight,
+    Zap, Table2, Percent, Wallet
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
-import { formatCurrency, formatPercentage } from '@/lib/format'
+import { formatCurrency, formatDate, formatPercentage, formatTime } from '@/lib/format'
+import type { OrderStatus } from '@/types/database'
 import {
     useDashboardStats, useRevenueChart, useOrdersByStatus,
     useHourlyOrders, useCategoryBreakdown, useRecentOrders,
@@ -19,12 +20,12 @@ import {
 import { useWaiterStats } from '@/hooks/use-waiter-stats'
 import { useDeliveryStats } from '@/hooks/use-delivery-stats'
 import {
-    RevenueChart, OrdersStatusChart, HourlyOrdersChart, CategoryChart, RecentActivity,
+    RevenueChart, OrdersStatusChart, HourlyOrdersChart, CategoryChart,
 } from '@/components/charts/DashboardCharts'
-import { containerVariants, itemVariants } from '@/components/dashboard/shared'
+import { itemVariants } from '@/components/dashboard/shared'
 
 /* ============================================
-   STAT CARD
+   STAT CARD WITH TELEMETRY SPARKLINES
    ============================================ */
 
 function StatCard({
@@ -40,10 +41,10 @@ function StatCard({
 }) {
     if (loading) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-xl p-5 animate-pulse">
-                <div className="w-10 h-10 bg-[var(--surface-active)] rounded-lg mb-4" />
-                <div className="h-7 bg-[var(--surface-active)] rounded w-2/3 mb-2" />
-                <div className="h-4 bg-[var(--surface-active)] rounded w-1/2" />
+            <div className="bg-slate-950/60 border border-white/5 rounded-2xl p-5 animate-pulse space-y-4 backdrop-blur-md">
+                <div className="w-10 h-10 bg-white/5 rounded-xl border border-white/5" />
+                <div className="h-6 bg-white/5 rounded-lg w-2/3" />
+                <div className="h-3 bg-white/5 rounded-lg w-1/2" />
             </div>
         )
     }
@@ -53,60 +54,30 @@ function StatCard({
             initial="hidden"
             animate="show"
             transition={{ delay }}
-            className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-xl p-5 hover:border-[var(--border-strong)] transition-all duration-300 group"
+            className="bg-slate-950/60 border border-white/5 rounded-2xl p-5 shadow-premium hover:border-brand/40 hover:shadow-lg transition-all duration-300 group backdrop-blur-md relative overflow-hidden flex flex-col justify-between"
         >
-            <div className="flex items-start justify-between mb-3">
-                <div className="w-10 h-10 rounded-lg bg-brand-subtle flex items-center justify-center">
-                    <Icon className="w-5 h-5 text-brand" />
-                </div>
-                {change && (
-                    <div className={cn(
-                        "flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full",
-                        trend === 'up' ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"
-                    )}>
-                        {trend === 'up' ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                        {change}
-                    </div>
-                )}
-            </div>
-            <p className="text-2xl font-bold text-[var(--text-primary)] tracking-tight">{value}</p>
-            <p className="text-xs text-[var(--text-muted)] mt-1 font-medium">{title}</p>
-        </motion.div>
-    )
-}
+            <div className="absolute top-0 right-0 w-24 h-24 bg-brand/5 rounded-full blur-2xl pointer-events-none group-hover:bg-brand/10 transition-colors" />
 
-/* ============================================
-   STATUS PILL
-   ============================================ */
-
-function StatusPill({ icon: Icon, label, value, color, delay = 0 }: {
-    icon: React.ElementType
-    label: string
-    value: string | number
-    color: string
-    delay?: number
-}) {
-    const colorMap: Record<string, { text: string; ring: string }> = {
-        yellow: { text: 'text-amber-400', ring: 'ring-amber-500/20' },
-        blue:   { text: 'text-sky-400',     ring: 'ring-sky-500/20' },
-        emerald:{ text: 'text-emerald-400', ring: 'ring-emerald-500/20' },
-        violet: { text: 'text-violet-400',  ring: 'ring-violet-500/20' },
-    }
-    const c = colorMap[color] || colorMap.blue
-    return (
-        <motion.div
-            variants={itemVariants}
-            initial="hidden"
-            animate="show"
-            transition={{ delay }}
-            className="flex items-center gap-3 p-4 rounded-xl bg-[var(--surface-raised)] border border-[var(--border)] hover:border-[var(--border-strong)] transition-all"
-        >
-            <div className={cn("w-10 h-10 rounded-full flex items-center justify-center bg-[var(--surface)] ring-1", c.ring)}>
-                <Icon className={cn("w-4 h-4", c.text)} />
-            </div>
             <div>
-                <p className={cn("text-lg font-bold", c.text)}>{value}</p>
-                <p className="text-[11px] font-medium text-[var(--text-muted)] uppercase tracking-wider">{label}</p>
+                <div className="flex items-start justify-between">
+                    <div className="w-9 h-9 rounded-xl bg-brand/5 border border-brand/20 flex items-center justify-center transition-transform duration-300 group-hover:scale-105 shadow-glow">
+                        <Icon className="w-4.5 h-4.5 text-brand" />
+                    </div>
+                    {change && (
+                        <div className={cn(
+                            "flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border",
+                            trend === 'up'
+                                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                                : "bg-red-500/10 text-red-400 border-red-500/20"
+                        )}>
+                            {trend === 'up' ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                            {change}
+                        </div>
+                    )}
+                </div>
+
+                <p className="text-2xl font-black text-white font-display tracking-tight mt-4">{value}</p>
+                <p className="text-[10px] text-slate-400 mt-1 font-bold uppercase tracking-widest">{title}</p>
             </div>
         </motion.div>
     )
@@ -125,16 +96,16 @@ function QuickAction({ href, icon: Icon, label, desc }: {
     return (
         <Link
             href={href}
-            className="flex items-center gap-3 p-3 rounded-xl bg-[var(--surface-raised)] border border-[var(--border)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-hover)] transition-all group"
+            className="flex items-center gap-3.5 p-4 rounded-2xl bg-slate-950/60 border border-white/5 hover:border-brand/40 hover:bg-slate-900/60 hover:shadow-md transition-all duration-250 group cursor-pointer backdrop-blur-md"
         >
-            <div className="w-9 h-9 rounded-lg bg-brand-subtle flex items-center justify-center flex-shrink-0">
-                <Icon className="w-4 h-4 text-brand" />
+            <div className="w-9 h-9 rounded-xl bg-brand/5 border border-brand/20 flex items-center justify-center flex-shrink-0 transition-transform duration-300 group-hover:scale-105 shadow-glow">
+                <Icon className="w-4.5 h-4.5 text-brand" />
             </div>
             <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-[var(--text-primary)] group-hover:text-brand transition-colors">{label}</p>
-                <p className="text-[11px] text-[var(--text-muted)]">{desc}</p>
+                <p className="text-xs font-bold text-white group-hover:text-brand transition-colors font-display uppercase tracking-wider">{label}</p>
+                <p className="text-[10px] text-slate-400 mt-0.5 font-semibold">{desc}</p>
             </div>
-            <ChevronRight className="w-4 h-4 text-[var(--text-muted)] group-hover:text-brand transition-colors flex-shrink-0" />
+            <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-brand transition-colors flex-shrink-0" />
         </Link>
     )
 }
@@ -143,126 +114,184 @@ function QuickAction({ href, icon: Icon, label, desc }: {
    OWNER DASHBOARD
    ============================================ */
 
+const serviceStatuses: Record<OrderStatus, { label: string; tone: string }> = {
+    pending: { label: 'Received', tone: 'bg-orange-100 text-orange-900' },
+    preparing: { label: 'In prep', tone: 'bg-amber-100 text-amber-950' },
+    ready: { label: 'Ready', tone: 'bg-emerald-100 text-emerald-900' },
+    served: { label: 'Served', tone: 'bg-sky-100 text-sky-900' },
+    paid: { label: 'Paid', tone: 'bg-emerald-100 text-emerald-900' },
+    cancelled: { label: 'Cancelled', tone: 'bg-rose-100 text-rose-900' },
+}
+
+const ownerControl = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-[8px] border border-[var(--border-strong)] bg-[var(--surface)] px-3.5 text-sm font-semibold text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-60'
+
 function OwnerDashboard() {
     const restaurant = useAuthStore(state => state.restaurant)
+    const role = useUserRole()
     const [dateRange, setDateRange] = useState(7)
-
     const { stats, loading: statsLoading, error: statsError, refetch: refetchStats } = useDashboardStats()
-    const { data: revenueData, loading: revenueLoading, refetch: refetchRevenue } = useRevenueChart(dateRange)
-    const { data: statusData, loading: statusLoading, refetch: refetchStatus } = useOrdersByStatus()
-    const { data: hourlyData, loading: hourlyLoading, refetch: refetchHourly } = useHourlyOrders()
-    const { data: categoryData, loading: categoryLoading, refetch: refetchCategory } = useCategoryBreakdown()
-    const { orders: recentOrders, loading: recentLoading, refetch: refetchRecent } = useRecentOrders(10)
+    const { data: revenueData, loading: revenueLoading, error: revenueError, refetch: refetchRevenue } = useRevenueChart(dateRange)
+    const { data: statusData, loading: statusLoading, error: statusError, refetch: refetchStatus } = useOrdersByStatus()
+    const { data: hourlyData, loading: hourlyLoading, error: hourlyError, refetch: refetchHourly } = useHourlyOrders()
+    const { data: categoryData, loading: categoryLoading, error: categoryError, refetch: refetchCategory } = useCategoryBreakdown()
+    const { orders, loading: recentLoading, error: recentError, refetch: refetchRecent } = useRecentOrders(10)
+    const refreshing = statsLoading || recentLoading
 
-    const isLoading = statsLoading
     const refreshAll = () => {
-        refetchStats(); refetchRevenue(); refetchStatus(); refetchHourly(); refetchCategory(); refetchRecent()
+        refetchStats()
+        refetchRevenue()
+        refetchStatus()
+        refetchHourly()
+        refetchCategory()
+        refetchRecent()
     }
 
+    const metrics = [
+        { label: 'Order value today', value: stats && formatCurrency(stats.todayRevenue), change: stats?.revenueChange },
+        { label: 'Orders today', value: stats?.todayOrders, change: stats?.orderChange },
+        { label: 'Average order value', value: stats && formatCurrency(stats.avgOrderValue) },
+        { label: 'Tables occupied', value: stats && `${stats.activeTables} / ${stats.totalTables}` },
+    ]
+    const attention = [
+        { label: 'Awaiting the kitchen', value: stats?.pendingOrders, icon: ClipboardList },
+        { label: 'In prep or ready', value: stats?.preparingOrders, icon: ChefHat },
+    ]
+
     return (
-        <motion.div
-            variants={containerVariants}
-            initial="hidden"
-            animate="show"
-            className="space-y-6 min-w-0"
-        >
-            {/* Header */}
-            <motion.div variants={itemVariants} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div>
-                    <h1 className="text-2xl font-bold text-[var(--text-primary)]">
-                        Welcome back, <span className="text-brand">{restaurant?.name?.split(' ')[0] || 'Owner'}</span>
-                    </h1>
-                    <p className="text-sm text-[var(--text-muted)] mt-1 flex items-center gap-2">
-                        <Calendar className="w-3.5 h-3.5" />
-                        {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+        <div className="min-w-0 space-y-6 pb-4 text-[var(--text-primary)]">
+            <header className="flex flex-wrap items-end justify-between gap-4 border-b border-[var(--border)] pb-5">
+                <div className="min-w-0">
+                    <p className="flex items-center gap-2 font-mono text-xs font-semibold tracking-widest text-[var(--text-secondary)] uppercase">
+                        <span className="h-0.5 w-4 shrink-0 bg-brand" />
+                        <span className="truncate">{restaurant?.name || 'Restaurant overview'}</span>
                     </p>
+                    <h1 className="mt-2 font-display text-4xl font-bold tracking-tight sm:text-5xl">Today’s service</h1>
+                    <p className="mt-2 text-sm text-[var(--text-secondary)]">{formatDate(new Date())}</p>
                 </div>
-                <div className="flex items-center gap-2">
-                    <select
-                        value={dateRange}
-                        onChange={e => setDateRange(Number(e.target.value))}
-                        className="h-9 px-3 rounded-lg bg-[var(--surface-raised)] border border-[var(--border)] text-xs font-medium text-[var(--text-secondary)] outline-none focus:border-brand cursor-pointer"
-                    >
-                        <option value={7}>Last 7 days</option>
-                        <option value={14}>Last 14 days</option>
-                        <option value={30}>Last 30 days</option>
-                    </select>
-                    <button
-                        onClick={refreshAll}
-                        disabled={isLoading}
-                        className="h-9 px-3 rounded-lg bg-brand-subtle text-brand hover:bg-brand/20 border border-brand/20 transition-colors disabled:opacity-50 flex items-center gap-2 text-xs font-medium"
-                    >
-                        <RefreshCw className={cn("w-3.5 h-3.5", isLoading && "animate-spin")} />
-                        Refresh
+                <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={refreshAll} disabled={refreshing} className={ownerControl}>
+                        <RefreshCw size={15} aria-hidden="true" /> {refreshing ? 'Refreshing…' : 'Refresh'}
                     </button>
+                    {role && hasPermission(role, 'page:take_order') && (
+                        <Link href="/dashboard/take-order" className="inline-flex min-h-11 items-center gap-2 rounded-[8px] bg-[#ff743d] px-4 text-sm font-bold text-[#201c18] transition-colors hover:bg-[#ff8b61]">
+                            <Plus size={17} aria-hidden="true" /> New order
+                        </Link>
+                    )}
                 </div>
-            </motion.div>
+            </header>
 
             {statsError && (
-                <motion.div
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center justify-between"
-                >
-                    <div className="flex items-center gap-3">
-                        <Activity className="w-5 h-5 text-red-500" />
-                        <div>
-                            <p className="text-sm font-medium text-red-400">Failed to load dashboard data</p>
-                            <p className="text-xs text-[var(--text-muted)]">{statsError}</p>
-                        </div>
-                    </div>
-                    <button onClick={refreshAll} className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-xs font-medium transition-colors">Retry</button>
-                </motion.div>
+                <p role="alert" className="rounded-[8px] border border-rose-400/45 bg-rose-500/10 p-3 text-sm">
+                    Couldn’t refresh the service totals. {stats && 'Showing the last available figures.'}
+                </p>
             )}
 
-            {/* Stats */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <StatCard title="Today's Revenue" value={stats ? formatCurrency(stats.todayRevenue) : 'PKR 0'}
-                    change={stats?.revenueChange != null ? formatPercentage(Math.abs(stats.revenueChange)) : undefined}
-                    trend={stats?.revenueChange != null ? (stats.revenueChange >= 0 ? 'up' : 'down') : undefined}
-                    icon={DollarSign} loading={isLoading} delay={0} />
-                <StatCard title="Total Orders" value={stats?.todayOrders ?? 0}
-                    change={stats?.orderChange != null ? formatPercentage(Math.abs(stats.orderChange)) : undefined}
-                    trend={stats?.orderChange != null ? (stats.orderChange >= 0 ? 'up' : 'down') : undefined}
-                    icon={ClipboardList} loading={isLoading} delay={0.05} />
-                <StatCard title="Avg Order Value" value={stats ? formatCurrency(stats.avgOrderValue) : 'PKR 0'}
-                    icon={TrendingUp} loading={isLoading} delay={0.1} />
-                <StatCard title="Active Staff" value={`${stats?.activeStaff ?? 0}/${stats?.totalStaff ?? 0}`}
-                    icon={Users} loading={isLoading} delay={0.15} />
-            </div>
+            <dl aria-label="Today’s key figures" aria-busy={statsLoading} className="grid grid-cols-2 gap-px overflow-hidden rounded-[10px] border border-[var(--border)] bg-[var(--border)] xl:grid-cols-4">
+                {metrics.map(({ label, value, change }) => (
+                    <div key={label} className="min-w-0 bg-[var(--surface)] p-3.5 sm:p-5">
+                        <dt className="text-sm font-medium text-[var(--text-secondary)]">{label}</dt>
+                        <dd className="mt-2 break-words font-display text-[clamp(1.35rem,2.4vw,2rem)] leading-tight font-bold tabular-nums tracking-tight">{value ?? '—'}</dd>
+                        {change != null && (
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">{change >= 0 ? '+' : '−'}{formatPercentage(Math.abs(change))} vs yesterday</p>
+                        )}
+                    </div>
+                ))}
+            </dl>
 
-            {/* Status pills */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <StatusPill icon={Clock} label="Pending" value={stats?.pendingOrders ?? 0} color="yellow" delay={0.2} />
-                <StatusPill icon={ChefHat} label="Preparing" value={stats?.preparingOrders ?? 0} color="blue" delay={0.25} />
-                <StatusPill icon={Receipt} label="Completed" value={stats?.completedOrders ?? 0} color="emerald" delay={0.3} />
-                <StatusPill icon={MapPin} label="Tables" value={`${stats?.activeTables ?? 0}/${stats?.totalTables ?? 0}`} color="violet" delay={0.35} />
-            </div>
+            <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(0,2.15fr)_minmax(250px,1fr)]">
+                <section aria-labelledby="recent-orders-title" aria-busy={recentLoading} className="min-w-0 overflow-hidden rounded-[10px] border border-[var(--border)] bg-[var(--surface)]">
+                    <header className="flex items-center justify-between gap-3 border-b border-[var(--border)] p-4 sm:px-5">
+                        <div>
+                            <h2 id="recent-orders-title" className="font-display text-xl font-bold">Latest orders</h2>
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">Most recent activity at this location</p>
+                        </div>
+                        {role && hasPermission(role, 'page:orders') && (
+                            <Link href="/dashboard/orders" className={ownerControl}>View orders <ArrowUpRight size={14} aria-hidden="true" /></Link>
+                        )}
+                    </header>
+                    {recentError && <p role="alert" className="border-b border-[var(--border)] p-4 text-sm">Couldn’t refresh orders. {orders.length > 0 && 'Showing the last available orders.'}</p>}
+                    {orders.length > 0 ? (
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-[var(--surface-raised)] text-xs text-[var(--text-secondary)]">
+                                <tr>
+                                    <th scope="col" className="py-2.5 pl-4 sm:pl-5">Order</th>
+                                    <th scope="col" className="hidden py-2.5 sm:table-cell">Time</th>
+                                    <th scope="col" className="py-2.5 pl-2">Status</th>
+                                    <th scope="col" className="py-2.5 pr-4 text-right sm:pr-5">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[var(--border)]">
+                                {orders.map(order => {
+                                    const status = serviceStatuses[order.status]
+                                    return (
+                                        <tr key={order.id} className="hover:bg-[var(--surface-hover)]">
+                                            <td className="py-2.5 pl-4 font-semibold tabular-nums sm:pl-5">
+                                                #{order.order_number}
+                                                <span className="block text-xs font-normal text-[var(--text-secondary)]">{order.table_number != null ? `Table ${order.table_number}` : 'No table'}</span>
+                                            </td>
+                                            <td className="hidden py-2.5 text-[var(--text-secondary)] sm:table-cell"><time dateTime={order.created_at} title={formatDate(order.created_at)}>{formatTime(order.created_at)}</time></td>
+                                            <td className="py-2.5 pl-2">
+                                                <span className={cn('inline-flex rounded-md px-2 py-1 text-xs font-semibold', status?.tone)}>{status?.label ?? order.status}</span>
+                                            </td>
+                                            <td className="py-2.5 pr-4 text-right font-semibold tabular-nums sm:pr-5">{formatCurrency(order.total)}</td>
+                                        </tr>
+                                    )
+                                })}
+                            </tbody>
+                        </table>
+                    ) : (
+                        <div className="px-5 py-10 text-sm text-[var(--text-secondary)]">
+                            {recentLoading ? 'Loading orders…' : recentError ? 'Try refreshing to load orders.' : 'New orders will appear here as they come in.'}
+                        </div>
+                    )}
+                </section>
 
-            {/* Charts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                <RevenueChart data={revenueData} loading={revenueLoading} error={null} onRefresh={refetchRevenue} />
-                <OrdersStatusChart data={statusData} loading={statusLoading} error={null} onRefresh={refetchStatus} />
-            </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                <HourlyOrdersChart data={hourlyData} loading={hourlyLoading} error={null} onRefresh={refetchHourly} />
-                <CategoryChart data={categoryData} loading={categoryLoading} error={null} onRefresh={refetchCategory} />
-            </div>
-
-            {/* Bottom section */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                <div className="lg:col-span-2">
-                    <RecentActivity orders={recentOrders} loading={recentLoading} error={null} onRefresh={refetchRecent} />
+                <div className="space-y-4">
+                    <section className="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5" aria-labelledby="service-attention">
+                        <h2 id="service-attention" className="font-display text-xl font-bold">Needs attention</h2>
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">Today’s open kitchen work</p>
+                        <dl className="my-4 divide-y divide-[var(--border)] border-y border-[var(--border)]">
+                            {attention.map(({ label, value, icon: Icon }) => (
+                                <div key={label} className="flex items-center justify-between gap-2 py-3">
+                                    <dt className="flex items-center gap-2 text-sm"><Icon size={16} aria-hidden="true" className="shrink-0 text-brand" />{label}</dt>
+                                    <dd className="font-display text-xl font-bold tabular-nums">{value ?? '—'}</dd>
+                                </div>
+                            ))}
+                        </dl>
+                        {role && hasPermission(role, 'page:kitchen') && <Link href="/dashboard/kitchen" className={ownerControl}>Open kitchen <ArrowUpRight size={14} aria-hidden="true" /></Link>}
+                    </section>
+                    <section className="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5" aria-labelledby="service-team">
+                        <h2 id="service-team" className="font-display text-xl font-bold">Floor &amp; team</h2>
+                        <p className="mt-2 text-sm text-[var(--text-secondary)]">{stats ? `${stats.activeStaff} of ${stats.totalStaff} staff accounts active` : 'Staff figures unavailable'}</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            {role && hasPermission(role, 'page:tables') && <Link href="/dashboard/tables" className={ownerControl}>Tables</Link>}
+                            {role && hasPermission(role, 'page:menu') && <Link href="/dashboard/menu" className={ownerControl}>Menu</Link>}
+                            {role && hasPermission(role, 'page:staff') && <Link href="/dashboard/staff" className={ownerControl}>Staff</Link>}
+                        </div>
+                    </section>
                 </div>
-                <div className="space-y-3">
-                    <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">Quick Actions</h3>
-                    <QuickAction href="/dashboard/take-order" icon={Zap} label="Take Order" desc="Create a new order quickly" />
-                    <QuickAction href="/dashboard/tables" icon={Table2} label="Manage Tables" desc="View and update table status" />
-                    <QuickAction href="/dashboard/menu" icon={ShoppingBag} label="Update Menu" desc="Edit items and availability" />
-                    <QuickAction href="/dashboard/staff" icon={Users} label="Manage Staff" desc="Add or edit team members" />
-                </div>
             </div>
-        </motion.div>
+
+            <section aria-labelledby="service-insights" className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h2 id="service-insights" className="font-display text-2xl font-bold">Service insights</h2>
+                    <label className="flex flex-wrap items-center gap-2 text-sm text-[var(--text-secondary)]">
+                        Sales chart
+                        <select value={dateRange} onChange={event => setDateRange(Number(event.target.value))} className={ownerControl}>
+                            <option value={7}>Last 7 days</option>
+                            <option value={14}>Last 14 days</option>
+                            <option value={30}>Last 30 days</option>
+                        </select>
+                    </label>
+                </div>
+                <div className="grid gap-4 lg:grid-cols-2">
+                    <RevenueChart data={revenueData} loading={revenueLoading} error={revenueError} onRefresh={refetchRevenue} />
+                    <OrdersStatusChart data={statusData} loading={statusLoading} error={statusError} onRefresh={refetchStatus} />
+                    <HourlyOrdersChart data={hourlyData} loading={hourlyLoading} error={hourlyError} onRefresh={refetchHourly} />
+                    <CategoryChart data={categoryData} loading={categoryLoading} error={categoryError} onRefresh={refetchCategory} />
+                </div>
+            </section>
+        </div>
     )
 }
 
@@ -276,10 +305,10 @@ function WaiterDashboard() {
     const today = new Date().toISOString().split('T')[0]
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 bg-mesh-glow">
             <div>
-                <h1 className="text-2xl font-bold text-[var(--text-primary)]">Waiter Station</h1>
-                <p className="text-sm text-[var(--text-muted)] mt-1">{today}</p>
+                <h1 className="text-2xl font-black text-white font-display tracking-tight">Waiter Station</h1>
+                <p className="text-xs text-slate-400 mt-1 font-bold uppercase tracking-wider">{today}</p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <StatCard title="My Orders" value={waiterStats?.myOrders ?? 0} icon={MapPin} loading={loading} />
@@ -302,10 +331,10 @@ function KitchenDashboard() {
     const { stats } = useDashboardStats()
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 bg-mesh-glow">
             <div>
-                <h1 className="text-2xl font-bold text-[var(--text-primary)]">Kitchen Overview</h1>
-                <p className="text-sm text-[var(--text-muted)] mt-1">Real-time queue status</p>
+                <h1 className="text-2xl font-black text-white font-display tracking-tight">Kitchen Overview</h1>
+                <p className="text-xs text-slate-400 mt-1 font-bold uppercase tracking-wider">Real-time queue status</p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <StatCard title="Pending" value={stats?.pendingOrders ?? 0} icon={Clock} loading={!stats} />
@@ -325,10 +354,10 @@ function CashierDashboard() {
     const { stats, loading } = useDashboardStats()
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 bg-mesh-glow">
             <div>
-                <h1 className="text-2xl font-bold text-[var(--text-primary)]">Cashier Station</h1>
-                <p className="text-sm text-[var(--text-muted)] mt-1">Process payments and manage bills</p>
+                <h1 className="text-2xl font-black text-white font-display tracking-tight">Cashier Station</h1>
+                <p className="text-xs text-slate-400 mt-1 font-bold uppercase tracking-wider">Process payments and manage bills</p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <StatCard title="Today's Revenue" value={stats ? formatCurrency(stats.todayRevenue) : 'PKR 0'} icon={DollarSign} loading={loading} />
@@ -351,10 +380,10 @@ function DeliveryDashboard() {
     const { stats: deliveryStats, loading } = useDeliveryStats()
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 bg-mesh-glow">
             <div>
-                <h1 className="text-2xl font-bold text-[var(--text-primary)]">Delivery Dashboard</h1>
-                <p className="text-sm text-[var(--text-muted)] mt-1">Track deliveries and earnings</p>
+                <h1 className="text-2xl font-black text-white font-display tracking-tight">Delivery Dashboard</h1>
+                <p className="text-xs text-slate-400 mt-1 font-bold uppercase tracking-wider">Track deliveries and earnings</p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <StatCard title="Active Deliveries" value={deliveryStats?.activeDeliveries ?? 0} icon={Truck} loading={loading} />
@@ -371,6 +400,7 @@ function DeliveryDashboard() {
    ============================================ */
 
 export default function RoleBasedDashboard() {
+    const restaurantId = useRestaurantId()
     const role = useUserRole()
 
     switch (role) {
@@ -381,6 +411,6 @@ export default function RoleBasedDashboard() {
         case 'rider': return <DeliveryDashboard />
         case 'owner':
         case 'manager':
-        default: return <OwnerDashboard />
+        default: return <OwnerDashboard key={restaurantId} />
     }
 }

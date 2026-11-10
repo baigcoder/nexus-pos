@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { validateApiKey, getCorsHeaders } from '@/lib/api-keys'
+import { checkRateLimitPersistent, getClientIp } from '@/lib/auth'
 
 // Default CORS headers for backward compatibility
 const defaultCorsHeaders = {
@@ -33,6 +34,17 @@ export async function GET(request: NextRequest) {
     const apiKey = request.headers.get('x-api-key')
 
     try {
+        const rate = await checkRateLimitPersistent(`v1_menu:${getClientIp(request)}`, {
+            maxRequests: 60,
+            windowMs: 60 * 1000,
+        })
+        if (!rate.allowed) {
+            return NextResponse.json(
+                { error: 'Too many menu requests. Please try again shortly.' },
+                { status: 429, headers: defaultCorsHeaders }
+            )
+        }
+
         const { searchParams } = new URL(request.url)
         const restaurantSlug = searchParams.get('restaurant')
         const restaurantId = request.headers.get('X-Restaurant-ID')
@@ -67,7 +79,7 @@ export async function GET(request: NextRequest) {
             corsHeaders = getCorsHeaders(origin, validation.allowedOrigins || [])
         }
 
-        const supabase = await createClient()
+        const supabase = createAdminClient()
 
         // Get restaurant
         let restaurantQuery = supabase.from('restaurants').select('*')
@@ -114,14 +126,14 @@ export async function GET(request: NextRequest) {
         const today = new Date().toISOString().split('T')[0]
         const { data: dailySpecials } = await supabase
             .from('daily_specials')
-            .select('menu_item_id, discount_percentage')
+            .select('menu_item_id, discount_percent, valid_date')
             .eq('restaurant_id', restaurant.id)
-            .eq('special_date', today)
+            .eq('valid_date', today)
             .eq('is_active', true)
 
         // Apply daily special discounts to items
         const specialsMap = new Map(
-            dailySpecials?.map(s => [s.menu_item_id, s.discount_percentage]) || []
+            dailySpecials?.map(s => [s.menu_item_id, s.discount_percent]) || []
         )
 
         const itemsWithSpecials = items?.map(item => ({
@@ -150,6 +162,7 @@ export async function GET(request: NextRequest) {
                 phone: restaurant.phone,
                 currency: restaurant.currency,
                 tax_rate: restaurant.tax_rate,
+                delivery_fee: Number(restaurant.settings?.delivery_fee ?? 0),
                 operating_hours: restaurant.operating_hours,
             },
             categories: categoriesWithCounts,

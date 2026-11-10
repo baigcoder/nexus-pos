@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createAdminClient } from '@/lib/supabase/admin'
 import { requireCashierOrAbove } from '@/lib/api-auth'
 import { sanitizeErrorMessage } from '@/lib/auth'
+import { OrderService } from '@/lib/services/order-service'
 
 const VALID_PAYMENT_METHODS = ['cash', 'card', 'mobile', 'split'] as const
 type PaymentMethod = typeof VALID_PAYMENT_METHODS[number]
@@ -9,12 +9,16 @@ type PaymentMethod = typeof VALID_PAYMENT_METHODS[number]
 interface PaymentRequest {
     orderId: string
     paymentMethod: PaymentMethod
+    amount?: number
     cashReceived?: number
     tip?: number
     discount?: number
+    is_split?: boolean
     splitPayments?: Array<{
+        split_number?: number
         method: PaymentMethod
         amount: number
+        items?: any[]
     }>
 }
 
@@ -22,8 +26,9 @@ export async function POST(request: NextRequest) {
     try {
         const { auth, response } = await requireCashierOrAbove()(request)
         if (response) return response
-
-        const supabase = createAdminClient()
+        if (!auth) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+        }
 
         let body: unknown
         try {
@@ -35,7 +40,20 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        const { orderId, paymentMethod, cashReceived, tip, discount, splitPayments } = body as PaymentRequest
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+            return NextResponse.json({ success: false, error: 'Invalid request body' }, { status: 400 })
+        }
+
+        const {
+            orderId,
+            paymentMethod,
+            amount,
+            cashReceived,
+            tip,
+            discount,
+            is_split,
+            splitPayments,
+        } = body as PaymentRequest
 
         if (!orderId || typeof orderId !== 'string') {
             return NextResponse.json(
@@ -51,80 +69,27 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        const { data: order, error: fetchError } = await supabase
-            .from('orders')
-            .select('id, status, total, subtotal, tax, restaurant_id')
-            .eq('id', orderId)
-            .single()
-
-        if (fetchError || !order) {
-            return NextResponse.json(
-                { success: false, error: 'Order not found' },
-                { status: 404 }
-            )
-        }
-
-        const payableStatuses = ['pending', 'preparing', 'ready', 'served']
-        if (!payableStatuses.includes(order.status)) {
-            return NextResponse.json(
-                { success: false, error: `Order cannot be paid in status: ${order.status}` },
-                { status: 400 }
-            )
-        }
-
-        if (paymentMethod === 'cash' && cashReceived !== undefined && cashReceived < order.total) {
-            return NextResponse.json(
-                { success: false, error: 'Cash received is less than order total' },
-                { status: 400 }
-            )
-        }
-
-        const updateData: Record<string, unknown> = {
-            status: 'paid',
+        const payment = await OrderService.settlePaymentAtomic({
+            order_id: orderId,
+            restaurant_id: auth.restaurantId,
+            request_key: request.headers.get('idempotency-key'),
+            staff_id: auth.staffId,
             payment_method: paymentMethod,
-            paid_at: new Date().toISOString(),
-        }
-
-        if (tip !== undefined && tip > 0) {
-            updateData.tip = tip
-        }
-
-        if (discount !== undefined && discount > 0) {
-            updateData.discount = discount
-        }
-
-        if (cashReceived !== undefined) {
-            updateData.cash_received = cashReceived
-            updateData.change_amount = Math.max(0, cashReceived - order.total - (tip || 0))
-        }
-
-        const { data: updatedOrder, error: updateError } = await supabase
-            .from('orders')
-            .update(updateData)
-            .eq('id', orderId)
-            .select()
-            .single()
-
-        if (updateError) {
-            console.error('[PROCESS_PAYMENT] Update error:', updateError.message)
-            return NextResponse.json(
-                { success: false, error: 'Failed to process payment' },
-                { status: 500 }
-            )
-        }
-
-        return NextResponse.json({
-            success: true,
-            order: {
-                id: updatedOrder.id,
-                order_number: updatedOrder.order_number,
-                status: updatedOrder.status,
-                total: updatedOrder.total,
-                payment_method: updatedOrder.payment_method,
-                paid_at: updatedOrder.paid_at,
-                change_amount: updatedOrder.change_amount,
-            },
+            amount,
+            cash_received: cashReceived,
+            tip,
+            discount,
+            is_split: is_split || paymentMethod === 'split',
+            split_payments: splitPayments,
         })
+
+        if (!payment.success) {
+            const status = payment.code === 'conflict' ? 409 : payment.code === 'not_found' ? 404 :
+                payment.code === 'internal' ? 500 : 400
+            return NextResponse.json({ success: false, error: payment.error }, { status })
+        }
+
+        return NextResponse.json({ success: true, payment })
     } catch (error: unknown) {
         console.error('[PROCESS_PAYMENT] Error:', error instanceof Error ? error.message : 'Unknown error')
         return NextResponse.json(

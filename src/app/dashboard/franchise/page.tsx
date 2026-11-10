@@ -1,16 +1,14 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import {
   Store,
-  TrendingUp,
   DollarSign,
   ShoppingBag,
   Users,
-  BarChart3,
   MapPin,
-  Clock,
   ArrowUpRight
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
@@ -21,18 +19,30 @@ import { cn } from '@/lib/utils'
 interface LocationStats {
   id: string
   name: string
+  slug: string
   address: string | null
+  isActive: boolean
   todayRevenue: number
   todayOrders: number
   activeStaff: number
   status: 'open' | 'closed' | 'busy'
 }
 
+interface FranchiseLocation {
+  id: string
+  name: string
+  slug: string
+  address: string | null
+  isActive: boolean
+  operatingHours: unknown
+}
+
 export default function FranchiseDashboardPage() {
   const [locations, setLocations] = useState<LocationStats[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [totals, setTotals] = useState({ revenue: 0, orders: 0, staff: 0 })
-  const { user } = useAuthStore()
+  const { user, setRestaurant, setUserRole } = useAuthStore()
+  const router = useRouter()
 
   useEffect(() => {
     loadFranchiseData()
@@ -52,7 +62,10 @@ export default function FranchiseDashboardPage() {
         restaurants (
           id,
           name,
-          address
+          slug,
+          address,
+          is_active,
+          operating_hours
         )
       `)
       .eq('user_id', user.id)
@@ -63,18 +76,63 @@ export default function FranchiseDashboardPage() {
       return
     }
 
-    // Mock stats for now (real implementation would aggregate from orders)
-    const locationData: LocationStats[] = staffRecords
+    const restaurants = staffRecords
       .filter((s: any) => s.restaurants)
-      .map((s: any, i: number) => ({
-        id: (s.restaurants as any).id,
-        name: (s.restaurants as any).name,
-        address: (s.restaurants as any).address,
-        todayRevenue: 25000 + Math.random() * 50000,
-        todayOrders: 45 + Math.floor(Math.random() * 100),
-        activeStaff: 3 + Math.floor(Math.random() * 5),
-        status: ['open', 'open', 'busy'][i % 3] as 'open' | 'closed' | 'busy',
+      .map((s: any) => ({
+        id: s.restaurants.id as string,
+        name: s.restaurants.name as string,
+        slug: s.restaurants.slug as string,
+        address: s.restaurants.address as string | null,
+        isActive: s.restaurants.is_active as boolean,
+        operatingHours: s.restaurants.operating_hours,
       }))
+      .filter((r: FranchiseLocation, i: number, arr: FranchiseLocation[]) => arr.findIndex((x: FranchiseLocation) => x.id === r.id) === i)
+
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+    const todayStartIso = todayStart.toISOString()
+
+    // Fetch real per-location stats in parallel
+    const locationData: LocationStats[] = await Promise.all(
+      restaurants.map(async (r: FranchiseLocation) => {
+        const [ordersRes, staffRes, activeOrdersRes] = await Promise.all([
+          supabase
+            .from('orders')
+            .select('total, status')
+            .eq('restaurant_id', r.id)
+            .gte('created_at', todayStartIso)
+            .neq('status', 'cancelled'),
+          supabase
+            .from('staff')
+            .select('id', { count: 'exact', head: true })
+            .eq('restaurant_id', r.id)
+            .eq('is_active', true),
+          supabase
+            .from('orders')
+            .select('id', { count: 'exact', head: true })
+            .eq('restaurant_id', r.id)
+            .in('status', ['pending', 'preparing', 'ready']),
+        ])
+
+        const orders = ordersRes.data || []
+        const paidRevenue = orders
+          .filter((o: { status?: string }) => o.status === 'paid' || o.status === 'served')
+          .reduce((sum: number, o: { total?: number | null }) => sum + (o.total || 0), 0)
+        const activeOrderCount = activeOrdersRes.count || 0
+
+        return {
+          id: r.id,
+          name: r.name,
+          slug: r.slug,
+          address: r.address,
+          isActive: r.isActive,
+          todayRevenue: paidRevenue,
+          todayOrders: orders.length,
+          activeStaff: staffRes.count || 0,
+          status: !r.isActive ? 'closed' : activeOrderCount >= 10 ? 'busy' : 'open',
+        }
+      })
+    )
 
     setLocations(locationData)
     setTotals({
@@ -83,6 +141,18 @@ export default function FranchiseDashboardPage() {
       staff: locationData.reduce((sum, l) => sum + l.activeStaff, 0),
     })
     setIsLoading(false)
+  }
+
+  function viewLocation(location: LocationStats) {
+    setRestaurant({
+      id: location.id,
+      name: location.name,
+      slug: location.slug,
+      address: location.address,
+      is_active: location.isActive,
+    } as any)
+    setUserRole('owner')
+    router.push('/dashboard')
   }
 
   const container = {
@@ -196,6 +266,7 @@ export default function FranchiseDashboardPage() {
 
               <Button
                 variant="outline"
+                onClick={() => viewLocation(location)}
                 className="w-full h-12 border-[var(--border)] text-[var(--text-muted)] hover:border-brand hover:text-brand transition-all group-hover:border-brand/50"
               >
                 View Dashboard <ArrowUpRight className="w-4 h-4 ml-2" />

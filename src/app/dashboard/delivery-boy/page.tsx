@@ -1,484 +1,320 @@
 'use client'
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { motion } from 'framer-motion'
-import {
-  Truck,
-  MapPin,
-  Phone,
-  Package,
-  Clock,
-  CheckCircle2,
-  Navigation,
-  Play,
-  Bell,
-  ChefHat,
-  RefreshCw,
-  Map
-} from 'lucide-react'
-import { Card, Button, Badge, LoadingSpinner } from '@/components/ui/common'
-import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores'
-import { useToast } from '@/components/ui/toast'
-import { withStaffAuthHeaders } from '@/lib/staff-api'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowRight, Navigation, Package } from 'lucide-react'
 import LiveTrackingMap from '@/components/maps/LiveTrackingMap'
+import { DeliveryBadge, DeliveryHeader, DeliveryNotice, DropOff, LastSync, RefreshDeliveries } from '@/components/service/DeliveryUI'
+import { cashDue, deliveryAction, inProgress, lineItems, orderLabel, point, stage, useDeliveries, type Delivery } from '@/components/service/delivery-data'
+import { money, ReviewDialog } from '@/components/service/ServiceOrder'
+import styles from '@/components/service/delivery.module.css'
+import work from '@/components/service/service-order.module.css'
+import { withStaffAuthHeaders } from '@/lib/staff-api'
+import { useAuthStore } from '@/stores'
 
-// Types
-type DeliveryStatus = 'assigned' | 'ready_pickup' | 'picked_up' | 'in_transit' | 'delivered'
-
-interface AssignedOrder {
-  id: string
-  orderId: string
-  orderNumber: number
-  customerName: string
-  customerPhone: string
-  address: string
-  status: DeliveryStatus
-  items: { name: string; quantity: number }[]
-  total: number
-  createdAt: string
-  restaurantLocation: { lat: number; lng: number }
-  customerLocation: { lat: number; lng: number }
-}
-
-const statusConfig: Record<DeliveryStatus, { label: string; color: string; bg: string; icon: React.ElementType }> = {
-  assigned: { label: 'Assigned', color: 'text-blue-500', bg: 'bg-blue-500/10', icon: Bell },
-  ready_pickup: { label: 'Ready for Pickup', color: 'text-brand', bg: 'bg-brand-subtle', icon: ChefHat },
-  picked_up: { label: 'Picked Up', color: 'text-emerald-500', bg: 'bg-emerald-500/10', icon: Package },
-  in_transit: { label: 'In Transit', color: 'text-brand', bg: 'bg-brand-subtle', icon: Navigation },
-  delivered: { label: 'Delivered', color: 'text-[var(--text-muted)]', bg: 'bg-[var(--surface-active)]', icon: CheckCircle2 },
-}
-
-function normalizeAssignmentStatus(status?: string): DeliveryStatus {
-  if (status === 'delivered') return 'delivered'
-  if (status === 'en_route' || status === 'arrived') return 'in_transit'
-  if (status === 'picked_up') return 'picked_up'
-  if (status === 'assigned' || status === 'pending') return 'assigned'
-  return 'ready_pickup'
-}
+const priorities = ['arrived', 'route', 'picked', 'pickup', 'kitchen']
+const nextActions = {
+    pickup: { status: 'picked_up', label: 'Confirm pickup' },
+    picked: { status: 'en_route', label: 'Start delivery' },
+    route: { status: 'delivered', label: 'Confirm delivery' },
+    arrived: { status: 'delivered', label: 'Confirm delivery' },
+} as const
+type Action = 'picked_up' | 'en_route' | 'delivered' | 'dispatch_exception'
 
 export default function DeliveryBoyPage() {
-  const { staff, userRole } = useAuthStore()
-  const { success, error: showError } = useToast()
-  const [isLoading, setIsLoading] = useState(true)
-  const [orders, setOrders] = useState<AssignedOrder[]>([])
-  const [deliveryScope, setDeliveryScope] = useState<'mine' | 'restaurant'>('mine')
-  const [serverRole, setServerRole] = useState<string | null>(null)
-  const [activeOrder, setActiveOrder] = useState<AssignedOrder | null>(null)
-  const [currentTime, setCurrentTime] = useState(new Date())
-  const [isTracking, setIsTracking] = useState(false)
-  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null)
+    const { restaurant, userRole, staff } = useAuthStore()
+    return restaurant?.id
+        ? <RiderRun key={`${restaurant.id}:${staff?.id || ''}:${userRole || ''}`} restaurantId={restaurant.id} currency={restaurant.currency || 'PKR'} />
+        : <main className={`${work.page} ${styles.page}`}><DeliveryHeader label="Rider station" title="Delivery run" description="Your pickups and drop-offs." /><p className={styles.empty}>Select a restaurant to view deliveries.</p></main>
+}
 
-  useEffect(() => {
-    const interval = setInterval(() => setCurrentTime(new Date()), 1000)
-    return () => clearInterval(interval)
-  }, [])
+function RiderRun({ restaurantId, currency }: { restaurantId: string; currency: string }) {
+    const feed = useDeliveries(restaurantId)
+    const gps = useDeliveryLocation()
+    const [selectedId, setSelectedId] = useState<string>()
+    const [showMap, setShowMap] = useState(false)
+    const [review, setDialog] = useState<{ type: 'cash' | 'issue'; id: string }>()
+    const [reason, setReason] = useState('')
+    const [pending, setPending] = useState(false)
+    const [actionError, setActionError] = useState('')
+    const [message, setMessage] = useState('')
+    const [history, setHistory] = useState<'delivered' | 'exception'>('delivered')
+    const updating = useRef(false)
+    const focusCard = useRef<HTMLElement>(null)
+    const deliveries = feed.data?.deliveries ?? []
+    const open = deliveries.filter(inProgress).sort((a, b) => priority(a) - priority(b) || Date.parse(a.created_at) - Date.parse(b.created_at))
+    const completed = deliveries.filter(row => stage(row) === 'delivered')
+    const issues = deliveries.filter(row => stage(row) === 'exception')
+    const dialog = review && open.some(row => row.id === review.id) ? review : undefined
+    const current = open.find(row => row.id === (dialog?.id || selectedId)) ?? open[0]
+    const currentStage = current ? stage(current) : undefined
+    const action = currentStage && currentStage in nextActions ? nextActions[currentStage as keyof typeof nextActions] : undefined
+    const scope = feed.data?.scope
+    const ownTrip = scope === 'mine' && current?.rider_id === feed.data?.staffId
+    const canWork = Boolean((scope === 'mine' && ownTrip) || ['owner', 'manager'].includes(feed.data?.role || ''))
+    const canTrack = ownTrip && (currentStage === 'route' || currentStage === 'arrived')
+    const cash = current ? cashDue(current) : 0
+    const items = current ? lineItems(current) : []
+    const pickupLat = current?.pickup_lat
+    const pickupLng = current?.pickup_lng
+    const pickup = useMemo(() => point(pickupLat, pickupLng), [pickupLat, pickupLng])
+    const dropLat = current?.delivery_lat
+    const dropLng = current?.delivery_lng
+    const dropoff = useMemo(() => point(dropLat, dropLng), [dropLat, dropLng])
+    const canMap = Boolean(process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY && pickup && dropoff)
+    const activeOrder = gps.orderId
+    const stop = gps.stop
 
-  const loadAssignedOrders = useCallback(async () => {
-      if (!staff?.id) return
-      setIsLoading(true)
-      const res = await fetch('/api/delivery/assignments', {
-        headers: withStaffAuthHeaders(),
-      })
-      const data = await res.json()
+    useEffect(() => {
+        const data = feed.data
+        if (activeOrder && data && !data.deliveries.some(row =>
+            row.order_id === activeOrder && row.rider_id === data.staffId && ['route', 'arrived'].includes(stage(row))
+        )) stop()
+    }, [activeOrder, feed.data, stop])
 
-      if (!res.ok || !data.success) {
-        showError('Delivery Error', data.error || 'Failed to load deliveries')
-        setIsLoading(false)
-        return
-      }
-
-      setDeliveryScope(data.scope || 'mine')
-      setServerRole(data.role || null)
-      setOrders((data.assignments || []).map((assignment: any) => {
-        const order = Array.isArray(assignment.order) ? assignment.order[0] : assignment.order
-        return {
-          id: assignment.id,
-          orderId: order?.id || '',
-          orderNumber: order?.order_number || 0,
-          customerName: assignment.customer_name || 'Customer',
-          customerPhone: assignment.customer_phone || '',
-          address: assignment.delivery_address || '',
-          status: normalizeAssignmentStatus(assignment.status),
-          items: (order?.order_items || []).map((item: any) => ({
-            name: item.menu_item?.name || 'Menu Item',
-            quantity: Number(item.quantity || 0),
-          })),
-          total: Number(order?.total || 0),
-          createdAt: order?.created_at || assignment.created_at,
-          restaurantLocation: {
-            lat: Number(assignment.pickup_lat || 24.8607),
-            lng: Number(assignment.pickup_lng || 67.0011),
-          },
-          customerLocation: {
-            lat: Number(assignment.delivery_lat || 24.8607),
-            lng: Number(assignment.delivery_lng || 67.0011),
-          },
-        }
-      }))
-      setIsLoading(false)
-  }, [staff?.id, showError])
-
-  useEffect(() => {
-    loadAssignedOrders()
-  }, [loadAssignedOrders])
-
-  const getElapsedTime = (createdAt: string) => {
-    return Math.floor((currentTime.getTime() - new Date(createdAt).getTime()) / 60000)
-  }
-
-  const stats = useMemo(() => ({
-    pending: orders.filter(o => ['assigned', 'ready_pickup'].includes(o.status)).length,
-    active: orders.filter(o => ['picked_up', 'in_transit'].includes(o.status)).length,
-    completed: orders.filter(o => o.status === 'delivered').length,
-  }), [orders])
-
-  // Start GPS tracking and send updates to backend
-  const startTracking = (orderId?: string) => {
-    if (!staff?.id) {
-      showError('Error', 'Staff ID not found')
-      return
+    function select(row: Delivery) {
+        setSelectedId(row.id)
+        setShowMap(false)
+        setActionError('')
+        requestAnimationFrame(() => focusCard.current?.focus())
     }
 
-    if (navigator.geolocation) {
-      setIsTracking(true)
-
-      const watchId = navigator.geolocation.watchPosition(
-        async (position) => {
-          const location = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          }
-          setCurrentLocation(location)
-
-          // Send location update to backend
-          try {
-            await fetch('/api/delivery/location', {
-              method: 'POST',
-              headers: withStaffAuthHeaders({ 'Content-Type': 'application/json' }),
-              body: JSON.stringify({
-                rider_id: staff.id,
-                latitude: location.lat,
-                longitude: location.lng,
-                accuracy: position.coords.accuracy,
-                heading: position.coords.heading,
-                speed: position.coords.speed ? position.coords.speed * 3.6 : null, // m/s to km/h
-                order_id: orderId,
-              }),
+    async function update(status: Action) {
+        if (!current || !canWork || updating.current || feed.error) return
+        if (dialog && dialog.id !== current.id) return
+        if (status === 'dispatch_exception' ? !reason.trim() : action?.status !== status) return
+        updating.current = true
+        setPending(true)
+        setActionError('')
+        setMessage('')
+        try {
+            await deliveryAction(current.id, status, {
+                ...(status === 'delivered' && cash > 0 ? { cashCollected: cash } : {}),
+                ...(status === 'dispatch_exception' ? { reason: reason.trim() } : {}),
             })
-          } catch (err) {
-            console.error('Failed to send location:', err)
-          }
-        },
-        (error) => {
-          console.error('GPS Error:', error)
-          showError('GPS Error', 'Could not get your location. Please enable location access.')
-          setIsTracking(false)
-        },
-        {
-          enableHighAccuracy: true,
-          maximumAge: 5000, // 5 seconds
-          timeout: 10000
+            if ((status === 'delivered' || status === 'dispatch_exception') && activeOrder === current.order_id) stop()
+            setMessage(status === 'dispatch_exception' ? 'Issue sent to dispatch.'
+                : status === 'delivered' ? `${orderLabel(current)} marked delivered.`
+                    : status === 'picked_up' ? 'Pickup confirmed. Start the delivery when you leave.' : 'Delivery started.')
+            setDialog(undefined)
+            setReason('')
+
+            if (status === 'delivered' || status === 'dispatch_exception') {
+                setSelectedId(undefined)
+                setShowMap(false)
+                setHistory(status === 'delivered' ? 'delivered' : 'exception')
+            }
+            const updated = await feed.refresh()
+            if (status === 'en_route' && ownTrip && updated?.staffId && updated.deliveries.some(
+                row => row.id === current.id && row.rider_id === updated.staffId && ['route', 'arrived'].includes(stage(row))
+            )) gps.start(current.order_id, updated.staffId)
+        } catch (failure) {
+            setActionError(failure instanceof Error ? failure.message : 'Could not update this delivery.')
+            await feed.refresh()
+        } finally {
+            setPending(false)
+            updating.current = false
         }
-      )
-
-      // Store watch ID to clear later
-      return watchId
-    } else {
-      showError('GPS Not Available', 'Your device does not support GPS tracking')
-    }
-  }
-
-  // Stop tracking
-  const updateOrderStatus = async (orderId: string, newStatus: DeliveryStatus) => {
-    const assignmentStatus =
-      newStatus === 'picked_up' ? 'picked_up' :
-        newStatus === 'in_transit' ? 'en_route' :
-          newStatus === 'delivered' ? 'delivered' :
-            'assigned'
-
-    const res = await fetch('/api/delivery/assignments', {
-      method: 'PATCH',
-      headers: withStaffAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ assignmentId: orderId, status: assignmentStatus }),
-    })
-    const result = await res.json()
-
-    if (!res.ok || !result.success) {
-      showError('Update Failed', result.error || 'Could not update delivery')
-      return
     }
 
-    const order = orders.find(o => o.id === orderId)
-    setOrders(prev => prev.map(o =>
-      o.id === orderId ? { ...o, status: newStatus } : o
-    ))
-
-    if (newStatus === 'picked_up') {
-      success('Order Picked Up', `Order #${order?.orderNumber} collected from kitchen`)
-    } else if (newStatus === 'in_transit') {
-      startTracking(order?.orderId)
-      success('Delivery Started', `GPS tracking active for Order #${order?.orderNumber}`)
-      setActiveOrder(orders.find(o => o.id === orderId) || null)
-    } else if (newStatus === 'delivered') {
-      setIsTracking(false)
-      setActiveOrder(null)
-      success('Delivery Complete!', `Order #${order?.orderNumber} delivered successfully`)
+    function next() {
+        if (!action) return
+        setActionError('')
+        if (action.status === 'delivered' && cash > 0 && current) setDialog({ type: 'cash', id: current.id })
+        else void update(action.status)
     }
-  }
 
-  const container = {
-    hidden: { opacity: 0 },
-    show: { opacity: 1, transition: { staggerChildren: 0.08 } }
-  }
+    const stepIndex = currentStage === 'picked' ? 1 : currentStage === 'route' || currentStage === 'arrived' ? 2 : 0
+    const gpsOnThisOrder = current && activeOrder === current.order_id
 
-  const itemVariant = {
-    hidden: { opacity: 0, y: 20 },
-    show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 100 } }
-  }
-
-  const effectiveRole = serverRole || userRole || staff?.role
-  const canWorkDelivery = effectiveRole === 'delivery' || effectiveRole === 'rider'
-  const canManageDelivery = effectiveRole === 'owner' || effectiveRole === 'manager'
-  const canChangeStatus = canWorkDelivery || canManageDelivery
-
-  return (
-    <div className="min-h-screen pb-20">
-      <motion.div variants={container} initial="hidden" animate="show" className="space-y-8">
-
-        {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
-          <div className="space-y-3">
-            <motion.div variants={itemVariant} className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-cyan-700 rounded-xl flex items-center justify-center shadow-cyan-500/30">
-                <Truck className="w-5 h-5 text-[var(--text-primary)]" />
-              </div>
-              <Badge variant="outline" className="border-brand/20 text-brand bg-cyan-500/5 px-3 py-1 font-bold uppercase tracking-widest text-[10px]">
-                {deliveryScope === 'restaurant' ? 'DELIVERY MONITOR' : 'DELIVERY PORTAL'}
-              </Badge>
-            </motion.div>
-            <motion.h1 variants={itemVariant} className="text-4xl lg:text-6xl font-display font-bold text-[var(--text-primary)] tracking-tight uppercase">
-              My <span className="text-brand">Deliveries</span>
-            </motion.h1>
-            <motion.p variants={itemVariant} className="text-[var(--text-muted)] text-lg font-medium">
-              {deliveryScope === 'restaurant'
-                ? `Viewing all delivery work for ${staff?.name ? `${staff.name}'s restaurant` : 'this restaurant'}`
-                : `Welcome back, ${staff?.name || 'Driver'}`}
-            </motion.p>
-          </div>
-
-          {/* Live Status */}
-          <motion.div variants={itemVariant} className="flex items-center gap-4">
-            {isTracking && (
-              <div className="flex items-center gap-3 px-6 py-3 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
-                <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse" />
-                <span className="text-sm font-bold text-emerald-500">GPS Active</span>
-              </div>
-            )}
-            <Button
-              variant="outline"
-              onClick={loadAssignedOrders}
-              disabled={isLoading}
-              className="h-12 px-6 rounded-xl border-[var(--border)] text-[var(--text-muted)] font-bold uppercase tracking-widest text-[10px] hover:text-[var(--text-primary)]"
-            >
-              <RefreshCw className={cn('w-4 h-4 mr-2', isLoading && 'animate-spin')} />
-              Refresh
-            </Button>
-          </motion.div>
-        </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-4">
-          {[
-            { label: 'Pending', value: stats.pending, color: 'text-brand', bg: 'bg-brand-subtle' },
-            { label: 'Active', value: stats.active, color: 'text-brand', bg: 'bg-brand-subtle' },
-            { label: 'Completed', value: stats.completed, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
-          ].map((stat, idx) => (
-            <motion.div key={idx} variants={itemVariant}>
-              <Card className={cn("p-5 bg-[var(--background)] border-[var(--surface-raised)] rounded-2xl", stat.bg)}>
-                <p className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1">{stat.label}</p>
-                <p className={cn("text-3xl font-black", stat.color)}>{stat.value}</p>
-              </Card>
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Active Delivery Map */}
-        {activeOrder && (
-          <motion.div variants={itemVariant}>
-            <Card className="p-0 bg-[var(--background)] border-brand/20 rounded-[2rem] overflow-hidden">
-              <div className="p-6 border-b border-[var(--surface-raised)] flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-brand-subtle flex items-center justify-center">
-                    <Navigation className="w-6 h-6 text-brand animate-pulse" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-[var(--text-primary)]">Active Delivery - Order #{activeOrder.orderNumber}</h3>
-                    <p className="text-sm text-[var(--text-muted)]">{activeOrder.address}</p>
-                  </div>
+    return <main className={`${work.page} ${styles.page}`}>
+        <DeliveryHeader label="Rider station" title={scope === 'restaurant' ? 'Delivery runs' : 'My delivery run'}
+            description={scope === 'restaurant' ? 'Review pickups and drop-offs across the restaurant.' : 'Pick up the order, head out, and confirm the drop-off.'}>
+            <LastSync at={feed.syncedAt} />
+            <RefreshDeliveries busy={feed.loading} onClick={() => void feed.refresh()} />
+        </DeliveryHeader>
+        <dl className={`${styles.summary} ${styles.riderSummary}`}>
+            <div><dt>Open stops</dt><dd>{feed.data ? open.length : '—'}</dd></div>
+            <div><dt>Delivered</dt><dd>{feed.data ? completed.length : '—'}</dd></div>
+            <div><dt>Issues</dt><dd>{feed.data ? issues.length : '—'}</dd></div>
+        </dl>
+        <div className={styles.stack}>
+            <DeliveryNotice {...feed} />
+            {message && <p className={styles.success} role="status">{message}</p>}
+            <div className={styles.split}>
+                <div className={styles.stack}>
+                    {current ? <section key={current.id} ref={focusCard} tabIndex={-1} aria-label={orderLabel(current)}
+                        className={`${work.panel} ${styles.focus} ${styles.stack} ${styles.enter}`}>
+                        <div className={styles.focusHead}><div><p className={styles.label}>Current stop</p><h2>{orderLabel(current)}</h2></div><DeliveryBadge delivery={current} /></div>
+                        <ol className={styles.steps} aria-label="Delivery progress">
+                            {['Pickup', 'Depart', 'Drop-off'].map((label, index) => <li key={label}
+                                aria-current={index === stepIndex ? 'step' : undefined} data-done={index < stepIndex}>{index + 1}. {label}</li>)}
+                        </ol>
+                        {currentStage === 'kitchen' && <p className={styles.empty}>The kitchen is preparing this order. Pickup becomes available when the order is ready.</p>}
+                        <DropOff delivery={current} directions />
+                        {cash > 0 && <div className={styles.cash}><span>Collect at the door</span><strong>{money(cash, currency)}</strong></div>}
+                        {canWork && action && <button type="button" className={`${work.primary} ${styles.riderAction}`} disabled={pending || !!feed.error} onClick={next}>
+                            {pending ? 'Updating…' : action.label} <ArrowRight size={18} aria-hidden="true" />
+                        </button>}
+                        {items.length > 0 && <details><summary>Order items ({items.reduce((sum, item) => sum + item.quantity, 0)})</summary>
+                            <ul className={work.lines}>{items.map((item, index) => <li key={index}>{item.quantity} × {item.name}</li>)}</ul>
+                        </details>}
+                        {canTrack && <div className={styles.stack}>
+                            {gpsOnThisOrder && <p className={gps.error ? styles.alert : styles.empty} role={gps.error ? 'alert' : 'status'}>
+                                {gps.error || (gps.sent ? 'Location shared with dispatch. Keep this page open during the trip.' : 'Waiting for a location update…')}
+                            </p>}
+                            <button type="button" className={work.secondary} disabled={!!feed.error} onClick={() => {
+                                if (gpsOnThisOrder && !gps.error) stop()
+                                else if (feed.data?.staffId) gps.start(current.order_id, feed.data.staffId)
+                            }}><Navigation size={16} aria-hidden="true" /> {gpsOnThisOrder && !gps.error ? 'Stop sharing location' : gpsOnThisOrder ? 'Retry location sharing' : 'Share trip location'}</button>
+                        </div>}
+                        {activeOrder && !gpsOnThisOrder && <p className={styles.empty}>Location sharing is running for another stop. <button type="button" className={work.secondary} onClick={stop}>Stop sharing</button></p>}
+                        {actionError && !dialog && <p className={styles.alert} role="alert">{actionError}</p>}
+                        <div className={styles.actions}>
+                            {canWork && current.rider_id && ['pickup', 'kitchen', 'picked', 'route', 'arrived'].includes(currentStage || '') &&
+                                <button type="button" className={work.secondary} disabled={pending || !!feed.error} onClick={() => { setActionError(''); setReason(''); setDialog({ type: 'issue', id: current.id }) }}>Report an issue</button>}
+                            {canMap && <button type="button" className={work.secondary} aria-expanded={showMap} onClick={() => setShowMap(!showMap)}>Route map</button>}
+                        </div>
+                        {showMap && canMap && pickup && dropoff && <LiveTrackingMap restaurantLocation={pickup} customerLocation={dropoff} riderLocation={gpsOnThisOrder && !gps.error ? gps.sent : undefined} className={styles.map} />}
+                    </section> : feed.data && <p className={styles.empty}>No open deliveries. New assignments will appear here.</p>}
                 </div>
-                <Button
-                  className="h-12 px-8 bg-emerald-500 hover:bg-emerald-600 text-[var(--text-primary)] rounded-xl font-bold uppercase tracking-widest text-xs"
-                  onClick={() => updateOrderStatus(activeOrder.id, 'delivered')}
-                  disabled={!canChangeStatus}
-                >
-                  <CheckCircle2 className="w-4 h-4 mr-2" />
-                  Mark Delivered
-                </Button>
-              </div>
-
-              {/* Live Map */}
-              <div className="h-80">
-                {currentLocation && activeOrder.customerLocation ? (
-                  <LiveTrackingMap
-                    restaurantLocation={activeOrder.restaurantLocation}
-                    customerLocation={activeOrder.customerLocation}
-                    riderLocation={currentLocation}
-                    riderName={staff?.name || 'Rider'}
-                    showRoute={true}
-                    className="h-full"
-                  />
-                ) : (
-                  <div className="h-full flex items-center justify-center bg-gradient-to-b from-[var(--surface-raised)] to-black">
-                    <div className="text-center z-10">
-                      <MapPin className="w-12 h-12 text-brand mx-auto mb-3 animate-bounce" />
-                      <p className="text-sm font-bold text-[var(--text-primary)]">Waiting for GPS Signal...</p>
-                      <p className="text-xs text-[var(--text-muted)] mt-1">
-                        Customer can see your location in real-time
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </Card>
-          </motion.div>
-        )}
-
-        {/* Orders List */}
-        <div className="space-y-4">
-          <h2 className="text-lg font-bold text-[var(--text-primary)] uppercase tracking-widest">Assigned Orders</h2>
-
-          {isLoading ? (
-            <div className="flex justify-center py-20"><LoadingSpinner /></div>
-          ) : orders.filter(o => o.status !== 'delivered').length === 0 ? (
-            <Card className="p-16 bg-[var(--surface-raised)]/30 border-[var(--border)]/50 text-center rounded-[2rem] border-dashed">
-              <Package className="w-16 h-16 text-[var(--text-secondary)] mx-auto mb-6" />
-              <h3 className="text-xl font-bold text-[var(--text-primary)] uppercase tracking-widest mb-2">No Orders</h3>
-              <p className="text-[var(--text-muted)]">
-                {deliveryScope === 'restaurant' ? 'No active delivery orders for this restaurant' : 'Wait for manager to assign orders'}
-              </p>
-            </Card>
-          ) : (
-            <div className="space-y-4">
-              {orders.filter(o => o.status !== 'delivered').map((order) => {
-                const statusCfg = statusConfig[order.status]
-                const elapsed = getElapsedTime(order.createdAt)
-                const StatusIcon = statusCfg.icon
-
-                return (
-                  <motion.div key={order.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} layout>
-                    <Card className="p-0 bg-[var(--background)] border-[var(--surface-raised)] hover:border-[var(--border)] transition-all rounded-[2rem] overflow-hidden">
-                      {/* Order Header */}
-                      <div className="p-6 border-b border-[var(--surface-raised)] flex items-center gap-6">
-                        <div className="w-16 h-16 rounded-2xl bg-[var(--surface)] border border-[var(--border)] flex items-center justify-center">
-                          <span className="text-xl font-black text-[var(--text-primary)]">#{order.orderNumber}</span>
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-3 mb-1">
-                            <h3 className="font-bold text-[var(--text-primary)]">{order.customerName}</h3>
-                            <Badge className={cn("px-2 py-0.5 text-[9px] font-black uppercase tracking-widest border-none", statusCfg.bg, statusCfg.color)}>
-                              <StatusIcon className="w-3 h-3 mr-1" />
-                              {statusCfg.label}
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-[var(--text-muted)]">{order.address}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-xl font-black text-[var(--text-primary)] tabular-nums">Rs.{order.total}</p>
-                          <p className="text-xs text-[var(--text-muted)]">{elapsed}m ago</p>
-                        </div>
-                      </div>
-
-                      {/* Items */}
-                      <div className="px-6 py-4 bg-[var(--surface)]/30">
-                        <div className="flex flex-wrap gap-2">
-                          {order.items.map((item, idx) => (
-                            <span key={idx} className="px-3 py-1 bg-[var(--surface-active)] rounded-full text-xs text-[var(--text-secondary)]">
-                              {item.quantity}x {item.name}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Actions */}
-                      <div className="p-6 flex gap-3">
-                        {/* Call Customer */}
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            if (order.customerPhone) window.location.href = `tel:${order.customerPhone}`
-                          }}
-                          className="h-14 flex-1 rounded-xl border-[var(--border)] text-[var(--text-muted)] font-bold uppercase tracking-widest text-[10px] hover:text-[var(--text-primary)]"
-                        >
-                          <Phone className="w-4 h-4 mr-2" />
-                          Call Customer
-                        </Button>
-
-                        {/* Status Actions */}
-                        {order.status === 'assigned' && (
-                          <Button
-                            className="h-14 flex-1 bg-[var(--surface-active)] hover:bg-[var(--surface-active)] text-[var(--text-primary)] rounded-xl font-bold uppercase tracking-widest text-xs"
-                            disabled
-                          >
-                            <Clock className="w-4 h-4 mr-2" />
-                            Waiting for Kitchen
-                          </Button>
-                        )}
-
-                        {order.status === 'ready_pickup' && (
-                          <Button
-                            className="h-14 flex-1 bg-brand hover:bg-brand-hover text-[var(--text-primary)] rounded-xl font-bold uppercase tracking-widest text-xs shadow-brand/20"
-                            onClick={() => updateOrderStatus(order.id, 'picked_up')}
-                            disabled={!canChangeStatus}
-                          >
-                            <ChefHat className="w-4 h-4 mr-2" />
-                            Confirm Pickup
-                          </Button>
-                        )}
-
-                        {order.status === 'picked_up' && (
-                          <Button
-                            className="h-14 flex-1 bg-cyan-600 hover:bg-cyan-500 text-[var(--text-primary)] rounded-xl font-bold uppercase tracking-widest text-xs shadow-cyan-600/20"
-                            onClick={() => updateOrderStatus(order.id, 'in_transit')}
-                            disabled={!canChangeStatus}
-                          >
-                            <Play className="w-4 h-4 mr-2" />
-                            Start Delivery
-                          </Button>
-                        )}
-
-                        {order.status === 'in_transit' && (
-                          <Button
-                            className="h-14 flex-1 bg-emerald-500 hover:bg-emerald-600 text-[var(--text-primary)] rounded-xl font-bold uppercase tracking-widest text-xs shadow-emerald-500/20"
-                            onClick={() => updateOrderStatus(order.id, 'delivered')}
-                            disabled={!canChangeStatus}
-                          >
-                            <CheckCircle2 className="w-4 h-4 mr-2" />
-                            Mark Delivered
-                          </Button>
-                        )}
-                      </div>
-                    </Card>
-                  </motion.div>
-                )
-              })}
+                <div className={styles.stack}>
+                    <section className={work.panel} aria-label="Open stops">
+                        <div className={work.panelHead}><div><h2>Open stops</h2><p>Trips in progress appear first.</p></div></div>
+                        {open.length > 0 && <ul className={styles.rows}>
+                            {open.map(row => <li key={row.id}><button type="button" className={styles.row} disabled={pending} aria-pressed={current?.id === row.id} onClick={() => select(row)}>
+                                <span className={styles.tile}><Package size={17} aria-hidden="true" /></span>
+                                <span className={styles.rowText}><strong>{orderLabel(row)}</strong><small>{row.delivery_address || 'Address unavailable'}</small></span>
+                                <DeliveryBadge delivery={row} />
+                            </button></li>)}
+                        </ul>}
+                        {!open.length && feed.data && <p className={styles.empty}>No stops in the queue.</p>}
+                    </section>
+                    <section className={work.panel} aria-label="Delivery history">
+                        <div className={work.panelHead}><div><h2>Delivery history</h2></div></div>
+                        <div className={styles.toolbar}><div className={work.filters} aria-label="History filters">
+                            <button type="button" aria-pressed={history === 'delivered'} onClick={() => setHistory('delivered')}>Delivered {completed.length}</button>
+                            <button type="button" aria-pressed={history === 'exception'} onClick={() => setHistory('exception')}>Issues {issues.length}</button>
+                        </div></div>
+                        <ul className={styles.rows}>{(history === 'delivered' ? completed : issues).map(row => <li key={row.id}>
+                            <div className={`${work.panelBody} ${styles.rowText}`}><strong>{orderLabel(row)}</strong>
+                                <small>{row.cancel_reason || row.delivery_address || 'Address unavailable'}</small></div>
+                        </li>)}</ul>
+                        {feed.data && !(history === 'delivered' ? completed : issues).length && <p className={styles.empty}>{history === 'delivered' ? 'No completed deliveries yet.' : 'No issues reported.'}</p>}
+                    </section>
+                </div>
             </div>
-          )}
         </div>
+        {dialog && current?.id === dialog.id && <ReviewDialog title={dialog.type === 'cash' ? 'Confirm cash collected' : 'Report a delivery issue'} subtitle={orderLabel(current)}
+            busy={pending} onClose={() => { setDialog(undefined); setActionError('') }}>
+            <form className={styles.stack} onSubmit={event => { event.preventDefault(); void update(dialog.type === 'cash' ? 'delivered' : 'dispatch_exception') }}>
+                {dialog.type === 'cash' ? <>
+                    <p>Confirm the exact cash amount you received at the door.</p>
+                    <div className={styles.cash}><span>Cash collected</span><strong>{money(cash, currency)}</strong></div>
+                </> : <label className={work.field}>What happened?
+                    <textarea rows={4} maxLength={500} required value={reason} disabled={pending} onChange={event => setReason(event.target.value)} placeholder="For example, the customer could not be reached" />
+                </label>}
+                {actionError && <p className={styles.alert} role="alert">{actionError}</p>}
+                <button type="submit" className={work.primary} disabled={pending || !!feed.error || (dialog.type === 'issue' ? !reason.trim() : cash <= 0 || action?.status !== 'delivered')}>
+                    {pending ? 'Saving…' : dialog.type === 'cash' ? 'Confirm cash and delivery' : 'Send issue to dispatch'}
+                </button>
+            </form>
+        </ReviewDialog>}
+    </main>
+}
 
-      </motion.div>
-    </div>
-  )
+function priority(row: Delivery) {
+    const index = priorities.indexOf(stage(row))
+    return index < 0 ? priorities.length : index
+}
+
+function useDeliveryLocation() {
+    const watch = useRef<number | null>(null)
+    const controller = useRef<AbortController | null>(null)
+    const generation = useRef(0)
+    const mounted = useRef(false)
+    const [orderId, setOrderId] = useState<string>()
+    const [sent, setSent] = useState<{ lat: number; lng: number }>()
+    const [error, setError] = useState('')
+    const expiry = useRef<number | undefined>(undefined)
+
+    const clear = useCallback(() => {
+        generation.current++
+        if (watch.current !== null) navigator.geolocation.clearWatch(watch.current)
+        watch.current = null
+        controller.current?.abort()
+        controller.current = null
+        window.clearTimeout(expiry.current)
+    }, [])
+
+    const stop = useCallback(() => {
+        clear()
+        setOrderId(undefined)
+        setSent(undefined)
+        setError('')
+    }, [clear])
+
+    useEffect(() => {
+        mounted.current = true
+        return () => { mounted.current = false; clear() }
+    }, [clear])
+
+    function start(order: string, rider: string) {
+        if (!mounted.current || !order) return
+        stop()
+        setOrderId(order)
+        if (!navigator.geolocation) {
+            setError('Location sharing is unavailable on this device.')
+            return
+        }
+
+        const current = generation.current
+        let lastAttempt = 0
+        function expire() {
+            window.clearTimeout(expiry.current)
+            expiry.current = window.setTimeout(() => {
+                if (generation.current === current) setError('No recent location update. Keep this page open or retry.')
+            }, 45_000)
+        }
+        expire()
+        try {
+            watch.current = navigator.geolocation.watchPosition(async ({ coords }) => {
+                if (generation.current !== current || controller.current || Date.now() - lastAttempt < 8_000) return
+                lastAttempt = Date.now()
+                const request = new AbortController()
+                controller.current = request
+                const position = { lat: coords.latitude, lng: coords.longitude }
+                try {
+                    const response = await fetch('/api/delivery/location', {
+                        method: 'POST',
+                        headers: withStaffAuthHeaders({ 'Content-Type': 'application/json' }),
+                        signal: request.signal,
+                        body: JSON.stringify({
+                            rider_id: rider, order_id: order, latitude: position.lat, longitude: position.lng,
+                            accuracy: coords.accuracy, heading: coords.heading, speed: coords.speed == null ? null : coords.speed * 3.6,
+                        }),
+                    })
+                    const data = await response.json().catch(() => null)
+                    if (!response.ok || !data?.success) throw new Error('Location update failed')
+                    if (generation.current === current) {
+                        setSent(position)
+                        setError('')
+                        expire()
+                    }
+                } catch {
+                    if (generation.current === current) setError('Dispatch could not receive your location. Check your connection or retry.')
+                } finally {
+                    if (controller.current === request) controller.current = null
+                }
+            }, failure => {
+                if (generation.current !== current) return
+                if (failure.code === 1) clear()
+                setError(failure.code === 1 ? 'Allow location access in your browser, then retry.' : 'Your device could not get a location. Move outside or retry.')
+            }, { enableHighAccuracy: true, maximumAge: 5_000, timeout: 12_000 })
+        } catch {
+            clear()
+            setError('Location sharing could not start. Check your browser permissions.')
+        }
+    }
+
+    return { start, stop, orderId, sent, error }
 }

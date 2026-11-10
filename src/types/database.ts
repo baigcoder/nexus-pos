@@ -11,6 +11,10 @@ export type OrderStatus = 'pending' | 'preparing' | 'ready' | 'served' | 'paid' 
 
 export type OrderItemStatus = 'pending' | 'preparing' | 'ready' | 'served'
 
+export type KitchenStatus = 'hold' | 'fired' | 'cooking' | 'plated' | 'served' | 'void_pending' | 'voided'
+
+export type DeliveryStatus = 'pending_dispatch' | 'assigned' | 'picked_up' | 'en_route' | 'arrived' | 'delivered' | 'dispatch_exception' | 'cancelled'
+
 export type PaymentMethod = 'cash' | 'card' | 'mobile' | 'other'
 
 export type PaymentStatus = 'pending' | 'completed' | 'failed' | 'refunded'
@@ -33,6 +37,8 @@ export interface Restaurant {
     is_active: boolean
     created_at: string
     updated_at: string
+    trial_ends_at?: string | null
+    plan?: string | null
 }
 
 export interface OperatingHours {
@@ -183,6 +189,7 @@ export interface Table {
     table_number: string
     capacity: number
     status: TableStatus
+    version?: number
     qr_code: string | null
     notes: string | null
     created_at: string
@@ -192,16 +199,26 @@ export interface Table {
 export interface Order {
     id: string
     restaurant_id: string
-    table_id: string
+    table_id: string | null
     staff_id: string | null
     order_number: number
     status: OrderStatus
+    order_type?: 'dine_in' | 'takeaway' | 'delivery'
     subtotal: number
     tax: number
+    delivery_fee?: number
     discount: number
     total: number
     notes: string | null
     is_priority: boolean
+    customer_name?: string | null
+    customer_phone?: string | null
+    customer_email?: string | null
+    delivery_address?: string | null
+    payment_method?: string | null
+    payment_status?: string | null
+    source?: string | null
+    client_order_id?: string | null
     created_at: string
     updated_at: string
     // Joined data
@@ -213,16 +230,32 @@ export interface Order {
 export interface OrderItem {
     id: string
     order_id: string
-    menu_item_id: string
+    menu_item_id: string | null
     quantity: number
     unit_price: number
     subtotal: number
     special_instructions: string | null
     customizations: SelectedCustomization[]
     status: OrderItemStatus
+    kitchen_status?: KitchenStatus
+    item_name_snapshot?: string
+    variant_name_snapshot?: string | null
+    unit_cost_snapshot?: number
+    tax_rate_snapshot?: number
+    tax_amount_snapshot?: number
     created_at: string
     // Joined data
     menu_item?: MenuItem
+    modifiers?: OrderItemModifier[]
+}
+
+export interface OrderItemModifier {
+    id: string
+    order_item_id: string
+    modifier_option_id?: string | null
+    modifier_name_snapshot: string
+    price_modifier_snapshot: number
+    created_at: string
 }
 
 export interface SelectedCustomization {
@@ -417,3 +450,111 @@ export interface Session {
     restaurant?: Restaurant
     staff?: Staff
 }
+
+// Register, Shifts & Cash Management
+export interface CashRegister {
+    id: string
+    restaurant_id: string
+    name: string
+    is_active: boolean
+    created_at: string
+    updated_at: string
+}
+
+export type ShiftStatus = 'open' | 'closed' | 'reconciled'
+
+export interface RegisterShift {
+    id: string
+    restaurant_id: string
+    register_id: string
+    staff_id: string
+    status: ShiftStatus
+    opening_float: number
+    closing_counted_cash?: number | null
+    expected_cash?: number | null
+    cash_difference?: number | null
+    total_sales_cash: number
+    total_sales_card: number
+    total_sales_mobile: number
+    total_tax_collected: number
+    total_refunds: number
+    opened_at: string
+    closed_at?: string | null
+    notes?: string | null
+    created_at: string
+    updated_at: string
+}
+
+export type DrawerMovementType = 'pay_in' | 'pay_out' | 'drop' | 'petty_cash'
+
+export interface CashDrawerMovement {
+    id: string
+    restaurant_id: string
+    shift_id: string
+    movement_type: DrawerMovementType
+    amount: number
+    reason: string
+    authorized_by: string
+    created_at: string
+}
+
+export interface WasteRecord {
+    id: string
+    restaurant_id: string
+    order_id: string
+    order_item_id: string
+    menu_item_id?: string | null
+    item_name: string
+    quantity: number
+    cost_price: number
+    total_cost_wasted: number
+    reason: string
+    staff_id?: string | null
+    created_at: string
+}
+
+// Transactional Event Outbox
+export interface RestaurantEvent {
+    id: number
+    restaurant_id: string
+    aggregate_type: string
+    aggregate_id: string
+    event_type: string
+    payload: Record<string, any>
+    created_at: string
+}
+
+// AI Skill & Human-In-The-Loop Action Proposals
+export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'executed'
+export type ProposalType = 'auto_86_item' | 'flag_cashier_discrepancy' | 'adjust_prep_time' | 'bulk_menu_import' | 'pacing_throttle'
+
+export interface DeliveryAssignment {
+    id: string
+    restaurant_id: string
+    order_id: string
+    rider_id?: string | null
+    customer_name: string
+    customer_phone?: string | null
+    delivery_address: string
+    status: DeliveryStatus
+    cod_amount_collected?: number
+    cod_settled?: boolean
+    cod_settled_at?: string | null
+    created_at: string
+    updated_at: string
+}
+
+export interface AiActionProposal {
+    id: string
+    restaurant_id: string
+    skill_name: string
+    proposal_type: ProposalType
+    status: ProposalStatus
+    confidence_score: number
+    reasoning: string
+    proposed_payload: Record<string, any>
+    reviewed_by?: string | null
+    reviewed_at?: string | null
+    created_at: string
+}
+

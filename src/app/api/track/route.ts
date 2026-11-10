@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 
-// Create admin client
-function getAdminClient() {
-    return createAdminClient()
-}
+import { privateOrderHeaders, verifyOrderAccessToken } from '@/lib/order-access'
 
 function normalizeTrackingStatus(params: {
     orderStatus: string | null | undefined
@@ -15,14 +12,14 @@ function normalizeTrackingStatus(params: {
     const orderStatus = params.orderStatus?.toLowerCase()
     const deliveryStatus = params.deliveryStatus?.toLowerCase()
 
-    if (deliveryStatus === 'delivered' || orderStatus === 'paid') {
+    if (deliveryStatus === 'delivered' || (!params.hasDeliveryAssignment && orderStatus === 'paid')) {
         return 'delivered'
     }
 
     if (
         deliveryStatus === 'dispatched' ||
         deliveryStatus === 'out_for_delivery' ||
-        deliveryStatus === 'picked_up'
+        deliveryStatus === 'picked_up' || deliveryStatus === 'en_route' || deliveryStatus === 'arrived'
     ) {
         return 'dispatched'
     }
@@ -42,31 +39,26 @@ function normalizeTrackingStatus(params: {
     return 'pending'
 }
 
-// GET /api/track?order_number=1234 - Get tracking info for an order
 export async function GET(request: NextRequest) {
+    const headers = privateOrderHeaders
     try {
-        const { searchParams } = new URL(request.url)
-        const orderNumber = searchParams.get('order_number')
-        const orderId = searchParams.get('order_id')
-
-        if (!orderNumber && !orderId) {
+        const orderId = verifyOrderAccessToken(request.headers.get('authorization'))
+        if (!orderId) {
             return NextResponse.json(
-                { success: false, error: 'order_number or order_id is required' },
-                { status: 400 }
+                { success: false, error: 'A valid order link is required' },
+                { status: 401, headers }
             )
         }
 
-        const supabase = getAdminClient()
-
-        // Find the order
-        let orderQuery = supabase
+        const supabase = createAdminClient()
+        const { data: order, error: orderError } = await supabase
             .from('orders')
             .select(`
                 id,
                 order_number,
                 status,
                 total,
-                notes,
+                restaurant_id,
                 created_at,
                 restaurant:restaurants(
                     id,
@@ -77,19 +69,13 @@ export async function GET(request: NextRequest) {
                     longitude
                 )
             `)
-
-        if (orderNumber) {
-            orderQuery = orderQuery.eq('order_number', parseInt(orderNumber))
-        } else {
-            orderQuery = orderQuery.eq('id', orderId)
-        }
-
-        const { data: order, error: orderError } = await orderQuery.single()
+            .eq('id', orderId)
+            .single()
 
         if (orderError || !order) {
             return NextResponse.json(
                 { success: false, error: 'Order not found' },
-                { status: 404 }
+                { status: 404, headers }
             )
         }
 
@@ -99,9 +85,6 @@ export async function GET(request: NextRequest) {
             .select(`
                 id,
                 status,
-                customer_name,
-                customer_phone,
-                delivery_address,
                 delivery_lat,
                 delivery_lng,
                 pickup_lat,
@@ -109,11 +92,11 @@ export async function GET(request: NextRequest) {
                 estimated_delivery_time,
                 rider:staff(
                     id,
-                    name,
-                    phone
+                    name
                 )
             `)
             .eq('order_id', order.id)
+            .eq('restaurant_id', order.restaurant_id)
             .single()
 
         // Get rider location if assigned
@@ -123,12 +106,17 @@ export async function GET(request: NextRequest) {
         // Handle rider data (could be array or object depending on join)
         const rider = Array.isArray(assignment?.rider) ? assignment.rider[0] : assignment?.rider
 
-        if (rider?.id && assignment) {
+        const isInTransit = assignment && ['picked_up', 'dispatched', 'out_for_delivery', 'en_route', 'arrived'].includes(assignment.status)
+        if (rider?.id && isInTransit && assignment) {
             const { data: location } = await supabase
-                .from('rider_locations')
-                .select('*')
+                .from('rider_location_history')
+                .select('latitude, longitude, heading, speed, recorded_at')
                 .eq('rider_id', rider.id)
-                .single()
+                .eq('order_id', order.id)
+                .gte('recorded_at', new Date(Date.now() - 2 * 60 * 1000).toISOString())
+                .order('recorded_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
 
             if (location) {
                 riderLocation = {
@@ -136,8 +124,8 @@ export async function GET(request: NextRequest) {
                     longitude: location.longitude,
                     heading: location.heading,
                     speed: location.speed,
-                    is_online: location.is_online,
-                    updated_at: location.updated_at,
+                    is_online: true,
+                    updated_at: location.recorded_at,
                 }
 
                 // Calculate ETA if destination available
@@ -160,11 +148,8 @@ export async function GET(request: NextRequest) {
             hasRiderLocation: !!riderLocation,
         })
 
-        // Parse delivery info from order notes if no assignment
         const deliveryInfo = {
             status: trackingStatus,
-            customer_name: assignment?.customer_name || '',
-            delivery_address: assignment?.delivery_address || '',
             destination: assignment ? {
                 lat: assignment.delivery_lat,
                 lng: assignment.delivery_lng,
@@ -173,17 +158,12 @@ export async function GET(request: NextRequest) {
                 lat: assignment.pickup_lat,
                 lng: assignment.pickup_lng,
             } : null,
-            rider: assignment?.rider || null,
+            rider: assignment?.rider
+                ? {
+                    name: (Array.isArray(assignment.rider) ? assignment.rider[0] : assignment.rider)?.name,
+                }
+                : null,
             estimated_delivery: assignment?.estimated_delivery_time || null,
-        }
-
-        // Extract info from notes if not in assignment (legacy orders)
-        if (!assignment && order.notes) {
-            const parts = order.notes.split(' | ')
-            if (parts.length >= 2) {
-                deliveryInfo.customer_name = parts[1] || ''
-                deliveryInfo.delivery_address = parts[3] || ''
-            }
         }
 
         // Restaurant info with default location if not set
@@ -217,13 +197,13 @@ export async function GET(request: NextRequest) {
             rider_location: riderLocation,
             restaurant: restaurantInfo,
             eta_minutes: etaMinutes,
-        })
+        }, { headers })
 
     } catch (error) {
         console.error('Track API error:', error)
         return NextResponse.json(
             { success: false, error: 'Failed to get tracking info' },
-            { status: 500 }
+            { status: 500, headers }
         )
     }
 }

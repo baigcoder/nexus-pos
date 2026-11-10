@@ -40,7 +40,7 @@ export default function LiveTrackingMap({
         const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 
         if (!apiKey) {
-            setError('Google Maps API key not configured')
+            setError('The map is unavailable right now.')
             return
         }
 
@@ -49,6 +49,7 @@ export default function LiveTrackingMap({
         script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry&v=weekly&callback=initMap`
         script.async = true
         script.defer = true
+        script.onerror = () => setError('Could not load the delivery map.')
 
             ; (window as any).initMap = () => {
                 const google = window.google
@@ -169,13 +170,19 @@ export default function LiveTrackingMap({
         document.head.appendChild(script)
 
         return () => {
+            script.remove()
             delete (window as any).initMap
         }
     }, [restaurantLocation, customerLocation, showRoute])
 
     // Update rider position
     useEffect(() => {
-        if (!riderLocation || !mapInstanceRef.current) return
+        if (!riderLocation) {
+            if (riderMarkerRef.current) riderMarkerRef.current.map = null
+            riderMarkerRef.current = null
+            return
+        }
+        if (!mapInstanceRef.current) return
 
         if (riderMarkerRef.current) {
             riderMarkerRef.current.position = riderLocation
@@ -200,7 +207,6 @@ export default function LiveTrackingMap({
                         <span className="text-3xl">🗺️</span>
                     </div>
                     <p className="text-neutral-400 text-sm">{error}</p>
-                    <p className="text-neutral-500 text-xs mt-2">Add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to .env</p>
                 </div>
             </div>
         )

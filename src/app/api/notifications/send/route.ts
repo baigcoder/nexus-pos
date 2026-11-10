@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { sendNotification, generateTrackingUrl, NotificationType } from '@/lib/twilio'
+import { sendNotification, NotificationType } from '@/lib/twilio'
+import { getAuthenticatedStaff } from '@/lib/api-auth'
 
 export async function POST(request: NextRequest) {
     try {
+        const auth = await getAuthenticatedStaff(request)
+        if (!auth) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+
         const body = await request.json()
         const {
             phone,
@@ -31,9 +37,6 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        // Generate tracking URL
-        const trackingUrl = orderNumber ? generateTrackingUrl(orderNumber) : undefined
-
         // Send notification
         const result = await sendNotification({
             to: phone,
@@ -42,7 +45,6 @@ export async function POST(request: NextRequest) {
             customerName,
             riderName,
             riderPhone,
-            trackingUrl,
             estimatedTime,
             customMessage,
         }, channel)

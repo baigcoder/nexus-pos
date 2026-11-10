@@ -7,7 +7,7 @@ import {
     sanitizeErrorMessage,
     createAuditEvent,
     logAuthEvent,
-    checkRateLimit,
+    checkRateLimitPersistent,
     getRateLimitHeaders,
     AUTH_CONSTANTS,
 } from '@/lib/auth'
@@ -33,6 +33,10 @@ export async function POST(request: NextRequest) {
             )
         }
 
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+            return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+        }
+
         const { email: rawEmail, code: rawCode } = body as Record<string, unknown>
         const email = sanitizeEmail(rawEmail)
         const code = typeof rawCode === 'string' ? rawCode.trim() : ''
@@ -54,7 +58,7 @@ export async function POST(request: NextRequest) {
         const clientIp = getClientIp(request)
         const rateLimitKey = `otp_verify:${clientIp}`
 
-        const rateResult = checkRateLimit(rateLimitKey, VERIFY_RATE_CONFIG)
+        const rateResult = await checkRateLimitPersistent(rateLimitKey, VERIFY_RATE_CONFIG)
         if (!rateResult.allowed) {
             return NextResponse.json(
                 { error: 'Too many verification attempts. Please try again later.' },
@@ -94,20 +98,10 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        let isValidCode = false
-        if (otpRecord.code.startsWith('$2')) {
-            isValidCode = await bcrypt.compare(code, otpRecord.code)
-        } else {
-            const hashedLegacy = await bcrypt.hash(code, 12)
-            isValidCode = await bcrypt.compare(code, hashedLegacy) || otpRecord.code === code
-            if (isValidCode && !otpRecord.code.startsWith('$2')) {
-                console.warn(`[VERIFY_OTP] Legacy plain-text OTP detected for ${email.slice(0, 3)}*** - auto-migrating to bcrypt`)
-                await supabase
-                    .from('otp_codes')
-                    .update({ code: await bcrypt.hash(code, 12) })
-                    .eq('id', otpRecord.id)
-            }
+        if (typeof otpRecord.code !== 'string' || !/^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(otpRecord.code)) {
+            return NextResponse.json({ error: 'Please request a new verification code.' }, { status: 400 })
         }
+        const isValidCode = await bcrypt.compare(code, otpRecord.code)
 
         if (!isValidCode) {
             const newAttempts = currentAttempts + 1
@@ -138,30 +132,38 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        await supabase
+        const { data: userId, error: lookupError } = await supabase.rpc('find_signup_user_by_email', { p_email: email })
+        if (lookupError) throw lookupError
+        if (!userId) {
+            return NextResponse.json({ error: 'Could not verify this signup. Please register again.' }, { status: 400 })
+        }
+
+        const { data: claimed, error: claimError } = await supabase
             .from('otp_codes')
             .update({ verified: true })
             .eq('id', otpRecord.id)
-
-        const { data: usersData } = await supabase.auth.admin.listUsers()
-        const verifiedUser = usersData?.users?.find(u => u.email?.toLowerCase() === email)
-
-        if (verifiedUser) {
-            await supabase.auth.admin.updateUserById(verifiedUser.id, {
-                email_confirm: true,
-            })
+            .eq('verified', false)
+            .gt('expires_at', new Date().toISOString())
+            .select('id')
+            .maybeSingle()
+        if (claimError) throw claimError
+        if (!claimed) {
+            return NextResponse.json({ error: 'Verification code is no longer available.' }, { status: 409 })
         }
 
-        await supabase.from('otp_codes').delete().eq('email', email)
+        const { error: confirmError } = await supabase.auth.admin.updateUserById(userId, { email_confirm: true })
+        if (confirmError) {
+            await supabase.from('otp_codes').update({ verified: false }).eq('id', otpRecord.id)
+            throw confirmError
+        }
 
-        await logAuthEvent(createAuditEvent('otp_verified', email, clientIp, { userId: verifiedUser?.id }))
+        await supabase.from('otp_codes').delete().eq('id', otpRecord.id)
+        await logAuthEvent(createAuditEvent('otp_verified', email, clientIp, { userId }))
 
         return NextResponse.json({
             success: true,
             message: 'Email verified successfully',
             verified: true,
-            userId: verifiedUser?.id || null,
-            email,
         })
     } catch (error: unknown) {
         console.error('[VERIFY_OTP] Error:', error instanceof Error ? error.message : 'Unknown error')

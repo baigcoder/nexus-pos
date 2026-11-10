@@ -9,11 +9,13 @@ import {
     createAuditEvent,
     logAuthEvent,
     getClientFingerprint,
-    checkRateLimit,
+    checkRateLimitPersistent,
     getRateLimitHeaders,
-    resetRateLimit,
+    resetRateLimitPersistent,
     AUTH_CONSTANTS,
 } from '@/lib/auth'
+import { jsonWithStaffSession } from '@/lib/staff-session'
+import type { UserRole } from '@/types'
 
 const {
     PIN_MAX_ATTEMPTS_PER_IP: MAX_IP_ATTEMPTS,
@@ -72,7 +74,7 @@ export async function POST(request: NextRequest) {
         const clientIp = getClientIp(request)
         const fingerprint = getClientFingerprint(request)
 
-        const ipRateResult = checkRateLimit(`staff_login:ip:${clientIp}`, IP_RATE_CONFIG)
+        const ipRateResult = await checkRateLimitPersistent(`staff_login:ip:${clientIp}`, IP_RATE_CONFIG)
         if (!ipRateResult.allowed) {
             await logAuthEvent(createAuditEvent('rate_limit_exceeded', clientIp, clientIp, { type: 'staff_login_ip' }))
             return NextResponse.json(
@@ -85,7 +87,7 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        const restaurantRateResult = checkRateLimit(`staff_login:restaurant:${restaurantSlug}`, RESTAURANT_RATE_CONFIG)
+        const restaurantRateResult = await checkRateLimitPersistent(`staff_login:restaurant:${restaurantSlug}`, RESTAURANT_RATE_CONFIG)
         if (!restaurantRateResult.allowed) {
             await logAuthEvent(createAuditEvent('rate_limit_exceeded', restaurantSlug, clientIp, { type: 'staff_login_restaurant' }))
             return NextResponse.json(
@@ -191,8 +193,8 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        resetRateLimit(`staff_login:ip:${clientIp}`)
-        resetRateLimit(`staff_login:restaurant:${restaurantSlug}`)
+        await resetRateLimitPersistent(`staff_login:ip:${clientIp}`)
+        await resetRateLimitPersistent(`staff_login:restaurant:${restaurantSlug}`)
 
         await logAuthEvent(createAuditEvent('staff_login', (matchedStaff as Record<string, unknown>).email as string, clientIp, {
             staffId: matchedStaff.id as string,
@@ -202,7 +204,7 @@ export async function POST(request: NextRequest) {
 
         const safeStaff = buildSafeStaffResponse(matchedStaff)
 
-        return NextResponse.json({
+        return await jsonWithStaffSession({
             success: true,
             staff: safeStaff,
             restaurant: {
@@ -214,6 +216,10 @@ export async function POST(request: NextRequest) {
                 tax_rate: restaurant.tax_rate,
                 settings: restaurant.settings,
             },
+        }, {
+            staffId: matchedStaff.id as string,
+            restaurantId: restaurant.id,
+            role: matchedStaff.role as UserRole,
         })
     } catch (error: unknown) {
         console.error('[STAFF_LOGIN] Error:', error instanceof Error ? error.message : 'Unknown error')

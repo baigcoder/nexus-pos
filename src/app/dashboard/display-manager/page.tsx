@@ -236,17 +236,17 @@ export default function DisplayManagerPage() {
    {/* Ad Content Banner */}
    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
     <a href="/dashboard/display-manager/ad-content"
-     className="group flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-pink-500/10 via-purple-500/8 to-violet-500/5 ring-1 ring-pink-500/15 hover:ring-pink-500/30 transition-all">
+     className="group flex items-center justify-between p-4 rounded-2xl bg-brand/10 ring-1 ring-brand/30 hover:ring-brand/60 transition-all">
      <div className="flex items-center gap-4">
-      <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center shadow-sm">
+      <div className="w-11 h-11 rounded-xl bg-brand flex items-center justify-center shadow-sm">
        <Megaphone className="w-5 h-5 text-white" />
       </div>
       <div>
-       <p className="font-bold text-sm text-[var(--text-primary)]">Advertisement Slideshow</p>
-       <p className="text-xs text-[var(--text-muted)]">Manage promotional content, banners & media</p>
+       <p className="font-bold text-sm text-[var(--text-primary)]">Signage Studio</p>
+       <p className="text-xs text-[var(--text-muted)]">Send images and videos to your storefront and waiting-area screens</p>
       </div>
      </div>
-     <div className="flex items-center gap-2 text-pink-400 text-sm font-semibold group-hover:gap-3 transition-all">
+     <div className="flex items-center gap-2 text-brand text-sm font-semibold group-hover:gap-3 transition-all">
       Manage <ArrowRight className="w-4 h-4" />
      </div>
     </a>
@@ -370,7 +370,7 @@ export default function DisplayManagerPage() {
        const cfg = TYPE_CONFIG[d.type]
        const Icon = cfg.icon
        return (
-        <a key={d.id} href={`/display/${d.slug}`} target="_blank" rel="noopener noreferrer"
+        <a key={d.id} href={`/display/${d.slug}?preview=1`} target="_blank" rel="noopener noreferrer"
          className="group flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-[var(--surface-hover)] transition-all">
          <div className={cn("w-7 h-7 rounded-lg bg-gradient-to-br flex items-center justify-center shrink-0", cfg.gradient)}>
           <Icon className="w-3.5 h-3.5 text-white" />

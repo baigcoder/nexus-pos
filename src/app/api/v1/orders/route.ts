@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { validateApiKey, getCorsHeaders } from '@/lib/api-keys'
+import { isFirstPartyOrigin } from '@/lib/origin'
+import { getTableQrSecret, verifyTableQrToken } from '@/lib/table-qr'
+import { checkRateLimitPersistent, getClientIp } from '@/lib/auth'
+import { OrderService } from '@/lib/services/order-service'
+import { getOrderAccessSecret, issueOrderAccessToken, privateOrderHeaders, verifyOrderAccessToken } from '@/lib/order-access'
 
 // Default CORS headers for backward compatibility
 const defaultCorsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-API-Key, X-Restaurant-ID',
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-API-Key, X-Restaurant-ID, Idempotency-Key, X-Idempotency-Key',
 }
 
 // Handle preflight
@@ -14,7 +19,6 @@ export async function OPTIONS(request: NextRequest) {
     const origin = request.headers.get('origin')
     const apiKey = request.headers.get('x-api-key')
 
-    // If API key provided, validate and get CORS settings
     if (apiKey) {
         const validation = await validateApiKey(apiKey, origin)
         if (validation.valid && validation.allowedOrigins) {
@@ -27,13 +31,28 @@ export async function OPTIONS(request: NextRequest) {
     return NextResponse.json({}, { headers: defaultCorsHeaders })
 }
 
-// POST /api/v1/orders - Create order from external website
+// POST /api/v1/orders - Create order from external website or QR ordering
 export async function POST(request: NextRequest) {
     const origin = request.headers.get('origin')
     const apiKey = request.headers.get('x-api-key')
 
     try {
-        const body = await request.json()
+        const rate = await checkRateLimitPersistent(`v1_orders:${getClientIp(request)}`, {
+            maxRequests: 40,
+            windowMs: 60 * 1000,
+        })
+        if (!rate.allowed) {
+            return NextResponse.json(
+                { error: 'Too many order requests. Please try again shortly.' },
+                { status: 429, headers: defaultCorsHeaders }
+            )
+        }
+
+        const body = await request.json().catch(() => null)
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+            return NextResponse.json({ error: 'Invalid request body' }, { status: 400, headers: defaultCorsHeaders })
+        }
+
         const {
             restaurant_id,
             customer_name,
@@ -43,18 +62,38 @@ export async function POST(request: NextRequest) {
             items,
             notes,
             is_delivery = true,
+            order_type,
+            table_number,
+            table_qr,
+            payment_method,
+            client_order_id,
         } = body
 
+        // QR table ordering: dine-in orders tied to a physical table
+        const isDineIn = order_type === 'dine_in' || !!table_number
+        const resolvedOrderType: 'dine_in' | 'takeaway' | 'delivery' = isDineIn
+            ? 'dine_in'
+            : is_delivery
+            ? 'delivery'
+            : 'takeaway'
+
         // Validate required fields
-        if (!restaurant_id) {
+        if (typeof restaurant_id !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(restaurant_id)) {
             return NextResponse.json(
                 { error: 'restaurant_id is required' },
                 { status: 400, headers: defaultCorsHeaders }
             )
         }
 
-        // If API key provided, validate it
+        // QR / first-party app can create without a key. External sites must send an API key.
         let corsHeaders: Record<string, string> = defaultCorsHeaders
+        if (!apiKey && !isFirstPartyOrigin(origin, request.nextUrl.origin)) {
+            return NextResponse.json(
+                { error: 'API key is required' },
+                { status: 401, headers: defaultCorsHeaders }
+            )
+        }
+
         if (apiKey) {
             const validation = await validateApiKey(apiKey, origin)
 
@@ -65,7 +104,6 @@ export async function POST(request: NextRequest) {
                 )
             }
 
-            // Check if API key matches restaurant
             if (validation.restaurantId !== restaurant_id) {
                 return NextResponse.json(
                     { error: 'API key does not match restaurant' },
@@ -73,7 +111,6 @@ export async function POST(request: NextRequest) {
                 )
             }
 
-            // Check permission
             if (!validation.permissions?.includes('orders:create')) {
                 return NextResponse.json(
                     { error: 'API key does not have permission to create orders' },
@@ -84,30 +121,30 @@ export async function POST(request: NextRequest) {
             corsHeaders = getCorsHeaders(origin, validation.allowedOrigins || [])
         }
 
-        if (!items || !Array.isArray(items) || items.length === 0) {
+        if (!Array.isArray(items) || items.length === 0 || items.length > 100) {
             return NextResponse.json(
-                { error: 'items array is required and must not be empty' },
+                { error: 'Order must contain between 1 and 100 line items' },
                 { status: 400, headers: corsHeaders }
             )
         }
 
-        if (!customer_name || !customer_phone) {
+        if (!isDineIn && (!customer_name || !customer_phone)) {
             return NextResponse.json(
                 { error: 'customer_name and customer_phone are required' },
                 { status: 400, headers: corsHeaders }
             )
         }
 
-        // Validate phone format (basic check)
-        const phoneRegex = /^[\d\s\-+()]{10,20}$/
-        if (!phoneRegex.test(customer_phone)) {
-            return NextResponse.json(
-                { error: 'Invalid phone number format' },
-                { status: 400, headers: corsHeaders }
-            )
+        if (customer_phone) {
+            const phoneRegex = /^[\d\s\-+()]{10,20}$/
+            if (!phoneRegex.test(customer_phone)) {
+                return NextResponse.json(
+                    { error: 'Invalid phone number format' },
+                    { status: 400, headers: corsHeaders }
+                )
+            }
         }
 
-        // Validate email if provided
         if (customer_email) {
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
             if (!emailRegex.test(customer_email)) {
@@ -118,12 +155,12 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        const supabase = await createClient()
+        const supabase = createAdminClient()
 
-        // Verify restaurant exists
+        // Verify restaurant exists and can accept orders
         const { data: restaurant, error: restaurantError } = await supabase
             .from('restaurants')
-            .select('id, tax_rate, name')
+            .select('id, tax_rate, name, is_active, plan, trial_ends_at')
             .eq('id', restaurant_id)
             .single()
 
@@ -134,145 +171,104 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        // Get menu items for price calculation
-        const itemIds = items.map((i: { menu_item_id: string }) => i.menu_item_id)
-        const { data: menuItems } = await supabase
-            .from('menu_items')
-            .select('id, price, name, is_available')
-            .in('id', itemIds)
-
-        if (!menuItems || menuItems.length === 0) {
+        if (!restaurant.is_active) {
             return NextResponse.json(
-                { error: 'Invalid menu items' },
-                { status: 400, headers: corsHeaders }
+                { error: 'Restaurant is currently unavailable' },
+                { status: 503, headers: corsHeaders }
             )
         }
 
-        // Check all items are available
-        const unavailableItems = menuItems.filter(item => !item.is_available)
-        if (unavailableItems.length > 0) {
+        const { canCreateOrders } = await import('@/lib/plan')
+        if (!canCreateOrders(restaurant)) {
             return NextResponse.json(
-                {
-                    error: 'Some items are not available',
-                    unavailable: unavailableItems.map(i => i.name)
-                },
-                { status: 400, headers: corsHeaders }
+                { error: 'This restaurant is not accepting new orders while the trial is expired.' },
+                { status: 402, headers: corsHeaders }
             )
         }
 
-        // Calculate totals
-        let subtotal = 0
-        const orderItems = items.map((item: { menu_item_id: string; quantity: number; special_instructions?: string }) => {
-            const menuItem = menuItems.find((m) => m.id === item.menu_item_id)
-            if (!menuItem) return null
-
-            // Validate quantity
-            const quantity = Math.max(1, Math.min(99, Math.floor(item.quantity)))
-            const itemTotal = menuItem.price * quantity
-            subtotal += itemTotal
-
-            return {
-                menu_item_id: item.menu_item_id,
-                quantity,
-                unit_price: menuItem.price,
-                subtotal: itemTotal,
-                special_instructions: item.special_instructions?.slice(0, 500) || null, // Limit length
-                status: 'pending',
+        // Resolve table if dine-in
+        let tableId: string | null = null
+        let qrOrderVersion: string | undefined
+        if (isDineIn) {
+            const qrSecret = getTableQrSecret()
+            if (!qrSecret) return NextResponse.json({ error: 'Table ordering is temporarily unavailable' }, { status: 503, headers: corsHeaders })
+            if (typeof table_qr !== 'string' || typeof table_number !== 'string' || !table_number.trim()) {
+                return NextResponse.json({ error: 'Scan the current QR code at your table' }, { status: 403, headers: corsHeaders })
             }
-        }).filter(Boolean)
-
-        const tax = Math.round(subtotal * (restaurant.tax_rate / 100))
-        const total = subtotal + tax
-
-        // Generate order number
-        const orderNumber = 1000 + Math.floor(Math.random() * 9000)
-
-        // Create a virtual table for delivery orders or find existing
-        let tableId = null
-        const { data: deliveryTable } = await supabase
-            .from('tables')
-            .select('id')
-            .eq('restaurant_id', restaurant_id)
-            .eq('table_number', 'DELIVERY')
-            .single()
-
-        if (deliveryTable) {
-            tableId = deliveryTable.id
-        } else {
-            // Create delivery virtual table
-            const { data: newTable } = await supabase
+            const { data: dineTable } = await supabase
                 .from('tables')
-                .insert({
-                    restaurant_id,
-                    table_number: 'DELIVERY',
-                    capacity: 1,
-                    status: 'available',
-                })
-                .select('id')
+                .select('id, is_qr_active, qr_order_version')
+                .eq('restaurant_id', restaurant_id)
+                .eq('table_number', String(table_number))
                 .single()
-            tableId = newTable?.id
+
+            if (!dineTable || dineTable.is_qr_active === false ||
+                !verifyTableQrToken(table_qr, restaurant.id, dineTable.id, dineTable.qr_order_version, qrSecret)) {
+                return NextResponse.json({ error: 'Scan the current QR code at your table' }, { status: 403, headers: corsHeaders })
+            }
+
+            tableId = dineTable.id
+            qrOrderVersion = dineTable.qr_order_version
         }
 
-        // Sanitize notes
-        const sanitizedNotes = [
-            is_delivery ? 'DELIVERY' : 'PICKUP',
-            customer_name.slice(0, 100),
-            customer_phone.slice(0, 20),
-            delivery_address ? delivery_address.slice(0, 200) : null,
-            notes ? notes.slice(0, 500) : null,
-        ].filter(Boolean).join(' | ')
-
-        // Create order
-        const { data: order, error: orderError } = await supabase
-            .from('orders')
-            .insert({
-                restaurant_id,
-                table_id: tableId,
-                order_number: orderNumber,
-                status: 'pending',
-                subtotal,
-                tax,
-                discount: 0,
-                total,
-                notes: sanitizedNotes,
-                is_priority: false,
+        const accessSecret = getOrderAccessSecret()
+        if (!accessSecret) {
+            return NextResponse.json({ error: 'Online ordering is temporarily unavailable' }, {
+                status: 503, headers: corsHeaders,
             })
-            .select('id, order_number')
-            .single()
-
-        if (orderError || !order) {
-            console.error('Order creation error:', orderError)
-            return NextResponse.json(
-                { error: 'Failed to create order' },
-                { status: 500, headers: corsHeaders }
-            )
         }
 
-        // Create order items
-        const orderItemsWithOrderId = orderItems.map((item) => ({
-            ...item,
-            order_id: order.id,
-        }))
+        const trackingUrl = new URL('/track', process.env.NEXT_PUBLIC_APP_URL || request.nextUrl.origin)
+        const requestKey = request.headers.get('idempotency-key') ??
+            request.headers.get('x-idempotency-key') ?? client_order_id
+        const result = await OrderService.createOrderAtomic({
+            restaurant_id,
+            table_id: tableId,
+            qr_order_version: qrOrderVersion,
+            order_type: resolvedOrderType,
+            items: items.map((item: any) => ({
+                menu_item_id: item?.menu_item_id,
+                quantity: item?.quantity ?? 1,
+                special_instructions: typeof item?.special_instructions === 'string'
+                    ? item.special_instructions.slice(0, 500) : null,
+                modifiers: item?.modifiers,
+            })),
+            notes: notes ? String(notes).slice(0, 500) : null,
+            is_priority: false,
+            customer_name: customer_name ? String(customer_name).slice(0, 100) : null,
+            customer_phone: customer_phone ? String(customer_phone).slice(0, 20) : null,
+            customer_email: customer_email ? String(customer_email).slice(0, 100) : null,
+            delivery_address: delivery_address ? String(delivery_address).slice(0, 300) : null,
+            payment_method: resolvedOrderType === 'delivery' ? 'cash_on_delivery' : payment_method ?? 'cash',
+            source: isDineIn ? 'qr_menu' : 'online_storefront',
+            client_order_id: requestKey,
+        })
 
-        await supabase.from('order_items').insert(orderItemsWithOrderId)
+        if (!result.success || !result.order_id) {
+            const status = result.code === 'conflict' ? 409 : result.code === 'internal' ? 500 : result.code === 'forbidden' ? 403 : 400
+            return NextResponse.json({ error: result.error || 'Failed to create order' }, { status, headers: corsHeaders })
+        }
 
-        // Generate tracking URL
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://nexuspos.com'
-        const trackingUrl = `${appUrl}/track?order=${order.order_number}`
-
+        const token = issueOrderAccessToken(result.order_id, accessSecret, result.credential_issued_at)
+        const activeToken = verifyOrderAccessToken(`Bearer ${token}`, accessSecret)
+        trackingUrl.hash = `token=${token}`
         return NextResponse.json({
             success: true,
             order: {
-                id: order.id,
-                order_number: order.order_number,
-                subtotal,
-                tax,
-                total,
-                status: 'pending',
+                id: result.order_id,
+                order_number: result.order_number,
+                subtotal: result.subtotal,
+                tax: result.tax,
+                delivery_fee: result.delivery_fee,
+                total: result.total,
+                status: result.status,
+                idempotent_replay: result.idempotent_replay || false,
             },
-            tracking_url: trackingUrl,
+            tracking_url: activeToken ? trackingUrl.href : null,
+            status_url: activeToken ? `/order/status/${result.order_id}#token=${token}` : null,
             message: 'Order created successfully',
-        }, { status: 201, headers: corsHeaders })
+        }, { status: 201, headers: { ...corsHeaders, ...privateOrderHeaders } })
+
 
     } catch (error) {
         console.error('Orders API error:', error)
@@ -283,60 +279,33 @@ export async function POST(request: NextRequest) {
     }
 }
 
-// GET /api/v1/orders?order_number=1234 - Get order status
+// The bearer token selects the order. Request identifiers cannot widen its scope.
 export async function GET(request: NextRequest) {
-    const origin = request.headers.get('origin')
-    const apiKey = request.headers.get('x-api-key')
+    const headers = { ...defaultCorsHeaders, ...privateOrderHeaders }
 
     try {
-        const { searchParams } = new URL(request.url)
-        const orderNumber = searchParams.get('order_number')
-        const orderId = searchParams.get('order_id')
-
-        if (!orderNumber && !orderId) {
-            return NextResponse.json(
-                { error: 'order_number or order_id is required' },
-                { status: 400, headers: defaultCorsHeaders }
-            )
+        const orderId = verifyOrderAccessToken(request.headers.get('authorization'))
+        if (!orderId) {
+            return NextResponse.json({ error: 'A valid order link is required' }, { status: 401, headers })
         }
 
-        // Determine CORS headers based on API key
-        let corsHeaders: Record<string, string> = defaultCorsHeaders
-        if (apiKey) {
-            const validation = await validateApiKey(apiKey, origin)
-            if (validation.valid && validation.allowedOrigins) {
-                corsHeaders = getCorsHeaders(origin, validation.allowedOrigins)
-            }
-        }
+        const details = await OrderService.getOrderDetails(orderId)
 
-        const supabase = await createClient()
-
-        let query = supabase
-            .from('orders')
-            .select('id, order_number, status, subtotal, tax, total, created_at, notes')
-
-        if (orderNumber) {
-            query = query.eq('order_number', parseInt(orderNumber))
-        } else {
-            query = query.eq('id', orderId)
-        }
-
-        const { data: order, error } = await query.single()
-
-        if (error || !order) {
+        if (!details.success || !details.order) {
             return NextResponse.json(
                 { error: 'Order not found' },
-                { status: 404, headers: corsHeaders }
+                { status: 404, headers }
             )
         }
 
-        // Map status to customer-friendly format
+        const order = details.order
+
         const statusMap: Record<string, string> = {
             pending: 'Order Received',
             preparing: 'Being Prepared',
             ready: 'Ready for Pickup',
-            served: 'Out for Delivery',
-            paid: 'Delivered',
+            served: 'Served',
+            paid: 'Delivered & Paid',
             cancelled: 'Cancelled',
         }
 
@@ -347,18 +316,34 @@ export async function GET(request: NextRequest) {
                 order_number: order.order_number,
                 status: order.status,
                 status_label: statusMap[order.status] || order.status,
+                order_type: order.order_type,
                 subtotal: order.subtotal,
                 tax: order.tax,
+                delivery_fee: order.delivery_fee,
+                discount: order.discount,
                 total: order.total,
                 created_at: order.created_at,
+                table: order.table,
+                restaurant: order.restaurant,
+                items: (order.order_items || []).map((item: any) => ({
+                    id: item.id,
+                    name: item.item_name_snapshot,
+                    variant: item.variant_name_snapshot,
+                    price: item.unit_price,
+                    quantity: item.quantity,
+                    subtotal: item.subtotal,
+                    special_instructions: item.special_instructions,
+                    kitchen_status: item.kitchen_status,
+                    modifiers: item.modifiers || [],
+                })),
             },
-        }, { headers: corsHeaders })
+        }, { headers })
 
     } catch (error) {
         console.error('Orders GET API error:', error)
         return NextResponse.json(
             { error: 'Internal server error' },
-            { status: 500, headers: defaultCorsHeaders }
+            { status: 500, headers }
         )
     }
 }

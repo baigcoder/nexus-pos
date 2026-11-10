@@ -136,6 +136,20 @@ export async function validateApiKey(
             })
             .eq('id', key.id)
 
+        if (key.rate_limit_per_minute) {
+            try {
+                const { data: allowed } = await supabase.rpc('check_api_key_rate_limit', {
+                    p_api_key_id: key.id,
+                    p_rate_limit: key.rate_limit_per_minute,
+                })
+                if (allowed === false) {
+                    return { valid: false, error: 'Rate limit exceeded' }
+                }
+            } catch {
+                // RPC may be missing until migrations are applied
+            }
+        }
+
         return {
             valid: true,
             restaurantId: key.restaurant_id,

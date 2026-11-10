@@ -1,0 +1,72 @@
+.page { width: min(100% - 32px, 1380px); margin-inline: auto; padding-block: clamp(15px,3vw,33px); }
+.actions, .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.toolbar { display: grid; gap: 8px; margin-bottom: 13px; }
+.filters { align-items: end; }
+.filters select { min-height: 44px; }
+.filters label { flex: 1; min-width: 120px; }
+.filters button[aria-pressed="true"], .actions button[aria-pressed="true"] { border-color: #ff743d; box-shadow: inset 0 0 0 1px #ff743d; background: var(--work-raised); }
+.kpi { font-variant-numeric: tabular-nums; }
+.status { display: inline-flex; width: fit-content; align-items: center; gap: 5px; border-radius: 5px; padding: 4px 7px; font-size: 12px; font-weight: 700; background: #e9e4dc; color: #52493f; white-space: nowrap; }
+.status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.status[data-state="pending"], .status[data-state="occupied"] { background: #f5dfd2; color: #7f3119; }
+.status[data-state="preparing"], .status[data-state="billing"] { background: #f4e8c6; color: #644a0e; }
+.status[data-state="ready"], .status[data-state="available"], .status[data-state="paid"] { background: #deedde; color: #224b30; }
+.status[data-state="served"], .status[data-state="reserved"] { background: #dce8f1; color: #294e66; }
+.status[data-state="cancelled"] { background: #f3dfe1; color: #7f2936; }
+.queueHead { display: none; padding: 7px 13px; background: var(--work-raised); color: var(--work-muted); font-size: 12px; font-weight: 700; }
+.queueRow { width: 100%; min-width: 0; min-height: 64px; display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 6px 10px; padding: 9px 13px; text-align: left; font-size: 14px; }
+.queueRow:hover, .queueRow[aria-pressed="true"] { background: var(--work-raised); }
+.queueRow[aria-pressed="true"] { box-shadow: inset 3px 0 #ff743d; }
+.queueRow:focus-visible { outline-offset: -3px !important; }
+.queueList li + li { border-top: 1px solid var(--work-line); }
+.orderId { display: block; font-weight: 750; font-variant-numeric: tabular-nums; }
+.orderMeta { display: block; color: var(--work-muted); font-size: 12px; overflow-wrap: anywhere; }
+.amount { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; text-align: right; }
+.channel { display: none; color: var(--work-muted); font-size: 13px; }
+.orderState { grid-column: 2; grid-row: 1; justify-self: end; }
+.orderTotal { grid-column: 2; grid-row: 2; }
+.orderTime { grid-column: 1; grid-row: 2; }
+.workspace { display: grid; align-items: start; gap: 12px; min-width: 0; }
+.workspace > * { min-width: 0; }
+.detail { display: none; }
+.detailBody { display: grid; gap: 13px; }
+.info { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.info small, .detailBody small { color: var(--work-muted); }
+.detailMeta { display: grid; gap: 6px; font-size: 14px; overflow-wrap: anywhere; }
+.detailMeta dt { color: var(--work-muted); font-size: 12px; }
+.detailMeta dd { font-weight: 600; }
+.lanes, .floorGrid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,188px),1fr)); gap: 9px; align-items: start; }
+.lane { padding: 9px; min-width: 0; border-radius: 8px; border: 1px solid var(--work-line); background: var(--work-raised); }
+.laneHead { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding-bottom: 8px; }
+.laneList { display: grid; gap: 6px; }
+.ticket { min-width: 0; border: 1px solid var(--work-line); border-radius: 7px; background: var(--work-paper); overflow: hidden; }
+.ticket .queueRow { min-height: 58px; padding-inline: 8px; }
+.ticketAction { display: grid; padding: 6px; border-top: 1px dashed var(--work-line); }
+.floorTile { min-width: 0; border: 1px solid var(--work-line); border-top: 3px solid var(--tile-edge,#b58c66); border-radius: 8px; padding: 12px; background: var(--work-paper); }
+.floorTile[data-state="available"] { --tile-edge: #679b70; }
+.floorTile[data-state="occupied"] { --tile-edge: #ff743d; }
+.floorTile[data-state="billing"] { --tile-edge: #d5a849; }
+.floorTile[data-state="reserved"] { --tile-edge: #7496b0; }
+.tileHead { display: flex; justify-content: space-between; align-items: start; gap: 6px; }
+.tileHead h3 { font: 700 clamp(22px,3vw,34px)/1 var(--font-display); letter-spacing: -.04em; overflow-wrap: anywhere; }
+.tileLabel { color: var(--work-muted); font: 600 10px/1.4 var(--font-mono); letter-spacing: .09em; text-transform: uppercase; margin-bottom: 4px; }
+.tileSeats { display: flex; align-items: center; gap: 6px; margin-top: 9px; padding-bottom: 9px; border-bottom: 1px dashed var(--work-line); font-size: 14px; color: var(--work-muted); }
+.tileActions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.tileActions > button { flex: 1; white-space: nowrap; }
+.iconAction { width: 44px; flex: none !important; padding-inline: 0 !important; }
+.danger { background: #fae6de !important; color: #7f2818 !important; border-color: #dca992 !important; }
+.floorForm { display: grid; gap: 10px; }
+.capacity { display: flex; flex-wrap: wrap; gap: 5px; }
+.capacity button { min-width: 44px; }
+.capacity button[aria-pressed="true"] { background: var(--work-raised); border-color: #ff743d; }
+@media (min-width: 670px) { .toolbar { grid-template-columns: minmax(185px,1fr) minmax(0,1.3fr); align-items: end; } }
+@media (min-width: 850px) {
+    .queueHead, .queueList .queueRow { display: grid; grid-template-columns: minmax(0,1.35fr) minmax(0,.75fr) minmax(75px,.8fr) minmax(70px,.6fr) minmax(73px,.7fr); gap: 7px; }
+    .channel { display: block; }
+    .orderState, .orderTime, .orderTotal { grid-column: auto; grid-row: auto; justify-self: auto; }
+}
+@media (min-width: 1220px) {
+    .workspace[data-detail="true"] { grid-template-columns: minmax(0,1fr) minmax(280px,320px); }
+    .detail { display: block; position: sticky; top: 78px; max-height: calc(100dvh - 93px); overflow: auto; }
+}
+@media (max-width: 410px) { .floorGrid { grid-template-columns: repeat(2,minmax(0,1fr)); } .tileHead { flex-wrap: wrap; } }
