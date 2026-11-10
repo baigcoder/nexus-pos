@@ -1,433 +1,208 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import {
-    ShoppingCart,
-    Plus,
-    Minus,
-    X,
-    Send,
-    ChefHat,
-    Utensils,
-    Loader2,
-    ChevronRight,
-    Phone,
-    MapPin,
-    User,
-    CheckCircle
-} from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ArrowRight, Check, Plus, ShoppingBag, Utensils } from 'lucide-react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { cn } from '@/lib/utils'
+import { useOrderSubmission } from '@/hooks/use-order-submission'
+import { GuestMessage } from '@/components/service/GuestJourney'
+import { addDraftLine, changeDraftQuantity, DraftReceipt, MenuFilters, money, orderTotals, ReviewDialog, SearchField, type DraftLine } from '@/components/service/ServiceOrder'
+import styles from '@/components/service/service-order.module.css'
+import journey from '@/components/service/guest-journey.module.css'
 
-type CartItem = {
-    id: string
-    name: string
-    price: number
-    quantity: number
+type Restaurant = { id: string; name: string; logo_url?: string | null; currency: string; tax_rate: number; delivery_fee?: number }
+type Item = {
+    id: string; name: string; category_id: string; description?: string | null; image_url?: string | null
+    price: number; is_available: boolean; has_special?: boolean; special_price?: number | null
 }
-
-type MenuItem = {
-    id: string
-    category_id: string
-    name: string
-    description: string | null
-    price: number
-    image_url: string | null
-    is_available: boolean
-}
-
-type Category = {
-    id: string
-    name: string
-    description: string | null
-}
-
-type Restaurant = {
-    id: string
-    name: string
-    slug: string
-    logo_url: string | null
-    currency: string
-    tax_rate: number
-}
+type Confirmation = { number: number; total: number; url?: string | null }
 
 export default function EmbedOrderPage() {
-    const params = useParams()
-    const searchParams = useSearchParams()
-    const slug = params.slug as string
-    const theme = searchParams.get('theme') || 'dark'
+    const { slug } = useParams<{ slug: string }>()
+    const theme = useSearchParams().get('theme') || 'dark'
+    return <EmbeddedMenu key={slug} slug={slug} dark={theme === 'dark'} />
+}
 
+function EmbeddedMenu({ slug, dark }: { slug: string; dark: boolean }) {
     const [restaurant, setRestaurant] = useState<Restaurant | null>(null)
-    const [categories, setCategories] = useState<Category[]>([])
-    const [items, setItems] = useState<MenuItem[]>([])
-    const [isLoading, setIsLoading] = useState(true)
-    const [error, setError] = useState<string | null>(null)
+    const [items, setItems] = useState<Item[]>([])
+    const [categories, setCategories] = useState<{ id: string; name: string }[]>([])
+    const [category, setCategory] = useState<string | null>(null)
+    const [query, setQuery] = useState('')
+    const [cart, setCart] = useState<DraftLine[]>([])
+    const [retry, setRetry] = useState(0)
+    const [loading, setLoading] = useState(true)
+    const [loadError, setLoadError] = useState('')
+    const [checkout, setCheckout] = useState(false)
+    const [submitting, setSubmitting] = useState(false)
+    const [submitError, setSubmitError] = useState('')
+    const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
+    const [name, setName] = useState('')
+    const [phone, setPhone] = useState('')
+    const [address, setAddress] = useState('')
+    const [delivery, setDelivery] = useState(false)
+    const sending = useRef(false)
+    const successTitle = useRef<HTMLHeadingElement>(null)
+    const { submitOrderRequest, completeOrderRequest } = useOrderSubmission()
 
-    const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
-    const [cart, setCart] = useState<CartItem[]>([])
-    const [showCheckout, setShowCheckout] = useState(false)
-    const [orderSubmitted, setOrderSubmitted] = useState(false)
-    const [orderNumber, setOrderNumber] = useState<number | null>(null)
-    const [isSubmitting, setIsSubmitting] = useState(false)
-
-    // Customer form
-    const [customerName, setCustomerName] = useState('')
-    const [customerPhone, setCustomerPhone] = useState('')
-    const [deliveryAddress, setDeliveryAddress] = useState('')
-
-    // Fetch menu
     useEffect(() => {
-        async function fetchMenu() {
+        const controller = new AbortController()
+        async function load() {
+            setLoading(true)
+            setLoadError('')
             try {
-                const res = await fetch(`/api/v1/menu?restaurant=${slug}`)
-                const data = await res.json()
-
-                if (!data.success) {
-                    setError(data.error || 'Failed to load menu')
-                    return
-                }
-
+                const response = await fetch(`/api/v1/menu?restaurant=${encodeURIComponent(slug)}`, { signal: controller.signal })
+                const data = await response.json()
+                if (!response.ok || !data.restaurant) throw new Error(data.error || 'The menu is unavailable right now.')
+                if (controller.signal.aborted) return
                 setRestaurant(data.restaurant)
-                setCategories(data.categories)
-                setItems(data.items)
-            } catch (err) {
-                setError('Failed to connect to restaurant')
+                setItems(data.items ?? [])
+                setCategories(data.categories ?? [])
+            } catch (error) {
+                if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : 'The menu could not be loaded.')
             } finally {
-                setIsLoading(false)
+                if (!controller.signal.aborted) setLoading(false)
             }
         }
-        fetchMenu()
-    }, [slug])
+        void load()
+        return () => controller.abort()
+    }, [slug, retry])
 
-    const addToCart = (item: MenuItem) => {
-        const existing = cart.find(c => c.id === item.id)
-        if (existing) {
-            setCart(cart.map(c => c.id === item.id ? { ...c, quantity: c.quantity + 1 } : c))
-        } else {
-            setCart([...cart, { id: item.id, name: item.name, price: item.price, quantity: 1 }])
+    useEffect(() => {
+        if (confirmation) successTitle.current?.focus()
+    }, [confirmation])
+
+    const currency = restaurant?.currency || 'PKR'
+    const taxRate = Number(restaurant?.tax_rate) || 0
+    const deliveryFee = delivery ? Number(restaurant?.delivery_fee) || 0 : 0
+    const total = orderTotals(cart, taxRate).total + deliveryFee
+    const count = cart.reduce((sum, line) => sum + line.quantity, 0)
+    const needle = query.trim().toLowerCase()
+    const shown = items.filter(item => item.is_available && (!category || item.category_id === category) &&
+        (!needle || [item.name, item.description].some(value => value?.toLowerCase().includes(needle))))
+    const theme = `${styles.page} ${styles.guestTheme} ${dark ? styles.guestDark : styles.guestLight}`
+
+    async function submit(event: React.FormEvent) {
+        event.preventDefault()
+        if (!restaurant || !count || sending.current) return
+        if (!name.trim() || !/^[\d\s+()-]{10,20}$/.test(phone.trim()) || (delivery && !address.trim())) {
+            setSubmitError('Enter your name, a valid phone number, and a delivery address if applicable.')
+            return
         }
-    }
-
-    const updateQuantity = (id: string, delta: number) => {
-        setCart(cart.map(item => {
-            if (item.id === id) {
-                const newQty = item.quantity + delta
-                return newQty > 0 ? { ...item, quantity: newQty } : item
-            }
-            return item
-        }).filter(item => item.quantity > 0))
-    }
-
-    const cartTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0)
-    const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0)
-    const taxAmount = restaurant ? Math.round(cartTotal * (restaurant.tax_rate / 100)) : 0
-    const grandTotal = cartTotal + taxAmount
-
-    const filteredItems = useMemo(() => {
-        return items.filter(item => !selectedCategory || item.category_id === selectedCategory)
-    }, [items, selectedCategory])
-
-    const submitOrder = async () => {
-        if (!restaurant || !customerName || !customerPhone) return
-
-        setIsSubmitting(true)
+        sending.current = true
+        setSubmitting(true)
+        setSubmitError('')
         try {
-            const res = await fetch('/api/v1/orders', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    restaurant_id: restaurant.id,
-                    customer_name: customerName,
-                    customer_phone: customerPhone,
-                    delivery_address: deliveryAddress,
-                    items: cart.map(item => ({
-                        menu_item_id: item.id,
-                        quantity: item.quantity,
-                    })),
-                    is_delivery: !!deliveryAddress,
-                })
+            const response = await submitOrderRequest('/api/v1/orders', {
+                restaurant_id: restaurant.id, customer_name: name.trim(), customer_phone: phone.trim(),
+                delivery_address: delivery ? address.trim() : '', is_delivery: delivery,
+                items: cart.map(line => ({ menu_item_id: line.id, quantity: line.quantity })),
             })
-
-            const data = await res.json()
-            if (data.success) {
-                setOrderNumber(data.order.order_number)
-                setOrderSubmitted(true)
-                setCart([])
-
-                // Notify parent window
-                window.parent.postMessage({
-                    type: 'nexus:order_complete',
-                    orderNumber: data.order.order_number,
-                    trackingUrl: data.tracking_url
-                }, '*')
-            }
-        } catch (err) {
-            console.error('Order failed:', err)
+            const data = await response.json()
+            if (!response.ok || !data.success || !data.order) throw new Error(data.error || 'Could not place the order.')
+            completeOrderRequest()
+            setConfirmation({
+                number: data.order.order_number,
+                total: data.order.total != null ? Number(data.order.total) : total,
+                url: delivery ? data.tracking_url : data.status_url || data.tracking_url,
+            })
+            setCheckout(false)
+            setCart([])
+            if (window.parent !== window) window.parent.postMessage({ type: 'nexus:order_complete', orderNumber: data.order.order_number }, '*')
+        } catch (error) {
+            setSubmitError(error instanceof Error ? error.message : 'Could not place the order. Try again.')
         } finally {
-            setIsSubmitting(false)
+            sending.current = false
+            setSubmitting(false)
         }
     }
 
-    const isDark = theme === 'dark'
-    const bgClass = isDark ? 'bg-neutral-950' : 'bg-white'
-    const textClass = isDark ? 'text-white' : 'text-neutral-900'
-    const mutedClass = isDark ? 'text-neutral-500' : 'text-neutral-500'
-    const cardClass = isDark ? 'bg-neutral-900 border-neutral-800' : 'bg-neutral-50 border-neutral-200'
+    if (loading) return <GuestMessage label="Online ordering" title="Loading the menu" loading dark={dark} />
+    if (loadError || !restaurant) return <GuestMessage label="Online ordering" title="Menu unavailable" message={loadError || 'Restaurant not found.'} dark={dark} retry={() => setRetry(value => value + 1)} />
 
-    if (isLoading) {
+    if (confirmation) {
         return (
-            <div className={cn("min-h-screen flex items-center justify-center", bgClass)}>
-                <Loader2 className="w-8 h-8 text-purple-500 animate-spin" />
-            </div>
-        )
-    }
-
-    if (error || !restaurant) {
-        return (
-            <div className={cn("min-h-screen flex items-center justify-center p-6", bgClass)}>
-                <div className="text-center">
-                    <ChefHat className="w-12 h-12 text-neutral-600 mx-auto mb-4" />
-                    <p className={cn("text-lg font-bold", textClass)}>{error || 'Restaurant not found'}</p>
-                </div>
-            </div>
-        )
-    }
-
-    if (orderSubmitted) {
-        return (
-            <div className={cn("min-h-screen flex items-center justify-center p-6", bgClass)}>
-                <div className="text-center space-y-6 max-w-sm">
-                    <div className="w-20 h-20 bg-emerald-500 rounded-full flex items-center justify-center mx-auto">
-                        <CheckCircle className="w-10 h-10 text-white" />
+            <main className={`${theme} ${styles.messagePage}`}>
+                <section className={styles.messageCard} aria-labelledby="embedded-confirmation">
+                    <p className={styles.kicker}>{restaurant.name}</p>
+                    <h1 id="embedded-confirmation" ref={successTitle} tabIndex={-1}>Order received</h1>
+                    <p className={styles.success}><Check size={18} aria-hidden="true" /> Your {delivery ? 'delivery' : 'pickup'} order is with the restaurant.</p>
+                    <dl className={styles.totals}><div><dt>Order</dt><dd>#{confirmation.number}</dd></div><div><dt>Total</dt><dd>{money(confirmation.total, currency)}</dd></div></dl>
+                    <div className={styles.messageActions}>
+                        {confirmation.url && <a className={styles.primary} href={confirmation.url} target="_blank" rel="noopener noreferrer">Track order <ArrowRight size={16} aria-hidden="true" /></a>}
+                        <button type="button" className={styles.secondary} onClick={() => setConfirmation(null)}>Back to menu</button>
+                        {typeof window !== 'undefined' && window.parent !== window && <button type="button" className={styles.secondary} onClick={() => window.parent.postMessage({ type: 'nexus:close' }, '*')}>Close</button>}
                     </div>
-                    <h1 className={cn("text-3xl font-black", textClass)}>Order Confirmed!</h1>
-                    <p className={mutedClass}>Your order number is</p>
-                    <p className="text-5xl font-black text-purple-500">#{orderNumber}</p>
-                    <p className={mutedClass}>We'll notify you when your order is ready.</p>
-                    <button
-                        onClick={() => window.parent.postMessage({ type: 'nexus:close' }, '*')}
-                        className="mt-6 px-8 py-4 bg-purple-600 text-white rounded-2xl font-bold"
-                    >
-                        Close
-                    </button>
-                </div>
-            </div>
+                </section>
+            </main>
         )
     }
 
     return (
-        <div className={cn("min-h-screen", bgClass)}>
-            {/* Header */}
-            <div className={cn("sticky top-0 z-40 p-4 border-b", cardClass)}>
-                <h1 className={cn("text-xl font-black", textClass)}>{restaurant.name}</h1>
-                <p className={cn("text-sm", mutedClass)}>Order for delivery or pickup</p>
-            </div>
-
-            {/* Categories */}
-            <div className="p-4 flex gap-2 overflow-x-auto">
-                <button
-                    onClick={() => setSelectedCategory(null)}
-                    className={cn(
-                        "px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-all",
-                        !selectedCategory
-                            ? "bg-purple-600 text-white"
-                            : isDark ? "bg-neutral-800 text-neutral-400" : "bg-neutral-100 text-neutral-600"
-                    )}
-                >
-                    All
-                </button>
-                {categories.map(cat => (
-                    <button
-                        key={cat.id}
-                        onClick={() => setSelectedCategory(cat.id)}
-                        className={cn(
-                            "px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-all",
-                            selectedCategory === cat.id
-                                ? "bg-purple-600 text-white"
-                                : isDark ? "bg-neutral-800 text-neutral-400" : "bg-neutral-100 text-neutral-600"
-                        )}
-                    >
-                        {cat.name}
-                    </button>
-                ))}
-            </div>
-
-            {/* Menu Items */}
-            <div className="p-4 space-y-3 pb-32">
-                {filteredItems.map(item => {
-                    const cartItem = cart.find(c => c.id === item.id)
-                    return (
-                        <div key={item.id} className={cn("p-4 rounded-2xl border", cardClass)}>
-                            <div className="flex justify-between items-start gap-4">
-                                <div className="flex-1">
-                                    <h3 className={cn("font-bold", textClass)}>{item.name}</h3>
-                                    {item.description && (
-                                        <p className={cn("text-sm mt-1 line-clamp-2", mutedClass)}>{item.description}</p>
-                                    )}
-                                    <p className="text-lg font-black text-purple-500 mt-2">
-                                        {restaurant.currency}{item.price}
-                                    </p>
-                                </div>
-                                <div>
-                                    {cartItem ? (
-                                        <div className="flex items-center gap-3 bg-purple-600 rounded-xl p-1">
-                                            <button
-                                                onClick={() => updateQuantity(item.id, -1)}
-                                                className="w-8 h-8 flex items-center justify-center text-white"
-                                            >
-                                                <Minus className="w-4 h-4" />
-                                            </button>
-                                            <span className="text-white font-bold w-4 text-center">{cartItem.quantity}</span>
-                                            <button
-                                                onClick={() => updateQuantity(item.id, 1)}
-                                                className="w-8 h-8 flex items-center justify-center text-white"
-                                            >
-                                                <Plus className="w-4 h-4" />
-                                            </button>
-                                        </div>
-                                    ) : (
-                                        <button
-                                            onClick={() => addToCart(item)}
-                                            className="w-10 h-10 bg-purple-600 rounded-xl flex items-center justify-center text-white"
-                                        >
-                                            <Plus className="w-5 h-5" />
+        <main className={theme}>
+            <header className={journey.embedHead}>
+                <div className={styles.brandBlock}>
+                    <span className={styles.restaurantMark}>{restaurant.logo_url ? <img src={restaurant.logo_url} alt="" /> : <Utensils size={24} aria-hidden="true" />}</span>
+                    <div><p className={styles.kicker}>Pickup &amp; delivery</p><h1>{restaurant.name}</h1></div>
+                </div>
+            </header>
+            <div className={`${journey.embedContent} ${styles.menuArea}`}>
+                <SearchField value={query} onChange={setQuery} />
+                <MenuFilters categories={categories} selected={category} onSelect={setCategory} />
+                {shown.length > 0 ? (
+                    <div className={styles.guestMenu}>
+                        {shown.map(item => {
+                            const special = item.has_special && item.special_price != null
+                            const price = Number(special ? item.special_price : item.price)
+                            const quantity = cart.find(line => line.id === item.id)?.quantity
+                            return (
+                                <article className={styles.dish} key={item.id}>
+                                    <div className={styles.dishCopy}>
+                                        {special && <span className={styles.tag}>Special</span>}
+                                        <h3>{item.name}</h3>{item.description && <p>{item.description}</p>}
+                                        <p className={styles.itemPrice}>{money(price, currency)} {special && <s>{money(Number(item.price), currency)}</s>}</p>
+                                    </div>
+                                    <div className={styles.dishSide}>
+                                        {item.image_url && <img src={item.image_url} alt="" loading="lazy" />}
+                                        <button type="button" className={quantity ? styles.primary : styles.secondary} aria-label={`Add ${item.name}`}
+                                            onClick={() => setCart(previous => addDraftLine(previous, { id: item.id, name: item.name, price }))}>
+                                            <Plus size={16} aria-hidden="true" /> {quantity || 'Add'}
                                         </button>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    )
-                })}
+                                    </div>
+                                </article>
+                            )
+                        })}
+                    </div>
+                ) : <p className={styles.empty}>{query || category ? 'No items match these filters.' : 'There are no items available right now.'}</p>}
             </div>
-
-            {/* Cart Footer */}
-            <AnimatePresence>
-                {cart.length > 0 && !showCheckout && (
-                    <motion.div
-                        initial={{ y: 100 }}
-                        animate={{ y: 0 }}
-                        exit={{ y: 100 }}
-                        className="fixed bottom-0 left-0 right-0 p-4"
-                    >
-                        <button
-                            onClick={() => setShowCheckout(true)}
-                            className="w-full h-16 bg-purple-600 text-white rounded-2xl font-bold flex items-center justify-between px-6 shadow-lg shadow-purple-600/30"
-                        >
-                            <div className="flex items-center gap-3">
-                                <ShoppingCart className="w-5 h-5" />
-                                <span>{cartItemCount} items</span>
+            {count > 0 && <button type="button" className={`${styles.primary} ${journey.checkoutBar}`} onClick={() => setCheckout(true)}>
+                <span className="inline-flex items-center gap-2"><ShoppingBag size={17} aria-hidden="true" /> Checkout · {count} {count === 1 ? 'item' : 'items'}</span>
+                <strong>{money(total, currency)}</strong>
+            </button>}
+            {checkout && (
+                <ReviewDialog title="Checkout" subtitle={restaurant.name} guest dark={dark} busy={submitting} onClose={() => setCheckout(false)}>
+                    <form onSubmit={submit} className={journey.stack}>
+                        <fieldset className={journey.fields} disabled={submitting}>
+                            <legend className={journey.sectionLabel}>How will you get your order?</legend>
+                            <div className={journey.choices}>
+                                <button type="button" className={styles.secondary} aria-pressed={!delivery} onClick={() => setDelivery(false)}>Pickup</button>
+                                <button type="button" className={styles.secondary} aria-pressed={delivery} onClick={() => setDelivery(true)}>Delivery</button>
                             </div>
-                            <span className="text-xl font-black">{restaurant.currency}{cartTotal}</span>
-                        </button>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-
-            {/* Checkout Modal */}
-            <AnimatePresence>
-                {showCheckout && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 bg-black/80 flex items-end"
-                    >
-                        <motion.div
-                            initial={{ y: '100%' }}
-                            animate={{ y: 0 }}
-                            exit={{ y: '100%' }}
-                            className={cn("w-full max-h-[90vh] rounded-t-3xl overflow-hidden", bgClass)}
-                        >
-                            <div className="p-4 border-b border-neutral-800 flex items-center justify-between">
-                                <h2 className={cn("text-xl font-black", textClass)}>Checkout</h2>
-                                <button onClick={() => setShowCheckout(false)} className="p-2">
-                                    <X className={cn("w-6 h-6", mutedClass)} />
-                                </button>
+                            <div className={journey.fieldGrid}>
+                                <label className={styles.field}>Name<input autoComplete="name" value={name} maxLength={100} required onChange={event => setName(event.target.value)} /></label>
+                                <label className={styles.field}>Phone<input type="tel" autoComplete="tel" value={phone} maxLength={20} required onChange={event => setPhone(event.target.value)} /></label>
                             </div>
-
-                            <div className="p-4 space-y-4 overflow-y-auto max-h-[60vh]">
-                                {/* Customer Info */}
-                                <div className="space-y-3">
-                                    <div className={cn("flex items-center gap-3 p-4 rounded-2xl border", cardClass)}>
-                                        <User className="w-5 h-5 text-purple-500" />
-                                        <input
-                                            type="text"
-                                            placeholder="Your Name"
-                                            value={customerName}
-                                            onChange={e => setCustomerName(e.target.value)}
-                                            className={cn("flex-1 bg-transparent outline-none font-medium", textClass)}
-                                        />
-                                    </div>
-                                    <div className={cn("flex items-center gap-3 p-4 rounded-2xl border", cardClass)}>
-                                        <Phone className="w-5 h-5 text-purple-500" />
-                                        <input
-                                            type="tel"
-                                            placeholder="Phone Number"
-                                            value={customerPhone}
-                                            onChange={e => setCustomerPhone(e.target.value)}
-                                            className={cn("flex-1 bg-transparent outline-none font-medium", textClass)}
-                                        />
-                                    </div>
-                                    <div className={cn("flex items-center gap-3 p-4 rounded-2xl border", cardClass)}>
-                                        <MapPin className="w-5 h-5 text-purple-500" />
-                                        <input
-                                            type="text"
-                                            placeholder="Delivery Address (optional)"
-                                            value={deliveryAddress}
-                                            onChange={e => setDeliveryAddress(e.target.value)}
-                                            className={cn("flex-1 bg-transparent outline-none font-medium", textClass)}
-                                        />
-                                    </div>
-                                </div>
-
-                                {/* Cart Items */}
-                                <div className="space-y-2">
-                                    {cart.map(item => (
-                                        <div key={item.id} className="flex justify-between items-center py-2">
-                                            <span className={textClass}>{item.quantity}x {item.name}</span>
-                                            <span className={textClass}>{restaurant.currency}{item.price * item.quantity}</span>
-                                        </div>
-                                    ))}
-                                </div>
-
-                                {/* Totals */}
-                                <div className={cn("p-4 rounded-2xl space-y-2", cardClass)}>
-                                    <div className="flex justify-between">
-                                        <span className={mutedClass}>Subtotal</span>
-                                        <span className={textClass}>{restaurant.currency}{cartTotal}</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                        <span className={mutedClass}>Tax ({restaurant.tax_rate}%)</span>
-                                        <span className={textClass}>{restaurant.currency}{taxAmount}</span>
-                                    </div>
-                                    <div className="flex justify-between pt-2 border-t border-neutral-700">
-                                        <span className={cn("font-bold", textClass)}>Total</span>
-                                        <span className="font-black text-xl text-purple-500">{restaurant.currency}{grandTotal}</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="p-4 border-t border-neutral-800">
-                                <button
-                                    onClick={submitOrder}
-                                    disabled={!customerName || !customerPhone || isSubmitting}
-                                    className="w-full h-14 bg-purple-600 text-white rounded-2xl font-bold disabled:opacity-50 flex items-center justify-center gap-2"
-                                >
-                                    {isSubmitting ? (
-                                        <Loader2 className="w-5 h-5 animate-spin" />
-                                    ) : (
-                                        <>
-                                            <Send className="w-5 h-5" />
-                                            Place Order
-                                        </>
-                                    )}
-                                </button>
-                            </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </div>
+                            {delivery && <label className={styles.field}>Delivery address<textarea autoComplete="street-address" value={address} rows={2} maxLength={500} required onChange={event => setAddress(event.target.value)} /></label>}
+                        </fieldset>
+                        <div>
+                            <DraftReceipt lines={cart} currency={currency} taxRate={taxRate} deliveryFee={deliveryFee} disabled={submitting}
+                                onQuantity={(id, delta) => setCart(previous => changeDraftQuantity(previous, id, delta))} />
+                            {delivery && <p className={journey.intro}>Pay on delivery.</p>}
+                        </div>
+                        {submitError && <p className={styles.error} role="alert">{submitError}</p>}
+                        <button type="submit" className={styles.primary} disabled={!count || submitting}>{submitting ? 'Placing order…' : 'Place order'} <ArrowRight size={16} aria-hidden="true" /></button>
+                    </form>
+                </ReviewDialog>
+            )}
+        </main>
     )
 }

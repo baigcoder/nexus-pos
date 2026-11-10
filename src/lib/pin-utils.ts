@@ -7,9 +7,8 @@ export async function hashPin(pin: string): Promise<string> {
 }
 
 export async function comparePin(pin: string, hashedPin: string): Promise<boolean> {
-    if (!hashedPin.startsWith('$2')) {
-        const isMatch = await bcrypt.compare(pin, await hashPin(pin))
-        return isMatch
+    if (!hashedPin || !hashedPin.startsWith('$2')) {
+        return false
     }
     return bcrypt.compare(pin, hashedPin)
 }

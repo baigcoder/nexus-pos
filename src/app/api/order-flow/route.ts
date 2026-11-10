@@ -1,61 +1,113 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { getAuthenticatedStaff } from '@/lib/api-auth'
+import { OrderService } from '@/lib/services/order-service'
 
-// Complete Restaurant Order Flow System
-// Handles: Dine-in (Table) -> Waiter -> Kitchen -> Ready -> Serve -> Pay
+const frontOfHouseRoles = ['owner', 'manager', 'waiter', 'cashier']
+const kitchenRoles = ['owner', 'manager', 'kitchen']
+const actionRoles = new Map<string, string[]>([
+    ['assign_table', frontOfHouseRoles],
+    ['release_table', frontOfHouseRoles],
+    ['transfer_table', frontOfHouseRoles],
+    ['merge_tables', frontOfHouseRoles],
+    ['get_available_tables', frontOfHouseRoles],
+    ['create_order', frontOfHouseRoles],
+    ['void_item', frontOfHouseRoles],
+    ['kitchen_start', [...frontOfHouseRoles, 'kitchen']],
+    ['kitchen_ready', kitchenRoles],
+    ['serve_order', [...frontOfHouseRoles, 'kitchen']],
+    ['request_bill', frontOfHouseRoles],
+    ['process_payment', ['owner', 'manager', 'cashier']],
+])
+
+const kitchenTargets = new Map([
+    ['kitchen_start', 'preparing'],
+    ['kitchen_ready', 'ready'],
+    ['serve_order', 'served'],
+])
 
 export async function POST(request: NextRequest) {
     try {
-        const supabase = await createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-
-        if (!user) {
+        const auth = await getAuthenticatedStaff(request)
+        if (!auth) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
-        // Get staff info
-        const { data: staffData } = await supabase
-            .from('staff')
-            .select('id, restaurant_id, role, name')
-            .eq('user_id', user.id)
-            .single()
-
-        if (!staffData) {
-            return NextResponse.json({ error: 'Staff not found' }, { status: 404 })
+        const supabase = createAdminClient()
+        const staffData = {
+            id: auth.staffId,
+            restaurant_id: auth.restaurantId,
+            role: auth.role,
+            name: auth.email,
         }
 
-        const { restaurant_id, role, action, data: actionData } = await request.json()
-        const targetRestaurantId = restaurant_id || staffData.restaurant_id
+        const body = await request.json()
+        const { restaurant_id, action, data: actionData } = body
+        if (restaurant_id && restaurant_id !== auth.restaurantId) {
+            return NextResponse.json({ error: 'Access denied for this restaurant' }, { status: 403 })
+        }
+        const targetRestaurantId = auth.restaurantId
+        const allowedRoles = actionRoles.get(action)
+        if (!allowedRoles) return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
+        if (!allowedRoles.includes(auth.role)) {
+            return NextResponse.json({ error: 'You do not have permission for this action' }, { status: 403 })
+        }
+
+        // Legacy commands use a service-role client. Scope caller-supplied IDs before any write.
+        if (action === 'request_bill') {
+            const { data: order, error } = await supabase.from('orders').select('id')
+                .eq('id', actionData?.order_id).eq('restaurant_id', targetRestaurantId).maybeSingle()
+            if (error || !order) return NextResponse.json({ error: 'Order not found' }, { status: 404 })
+        }
+
+        if (['assign_table', 'transfer_table', 'merge_tables'].includes(action)) {
+            const tableIds: unknown[] = action === 'assign_table' ? [actionData?.table_id]
+                : action === 'transfer_table' ? [actionData?.from_table_id, actionData?.to_table_id]
+                : [actionData?.source_table_id, actionData?.target_table_id]
+            if (tableIds.some(id => typeof id !== 'string' || !id) || new Set(tableIds).size !== tableIds.length) {
+                return NextResponse.json({ error: 'Distinct table IDs are required' }, { status: 400 })
+            }
+            const { data: tables, error } = await supabase.from('tables').select('id')
+                .eq('restaurant_id', targetRestaurantId).in('id', tableIds)
+            if (error || tables?.length !== tableIds.length) {
+                return NextResponse.json({ error: 'Table not found' }, { status: 404 })
+            }
+        }
 
         // ============== TABLE MANAGEMENT ==============
         if (action === 'assign_table') {
-            // Manager/Owner assigns table to waiter
             const { table_id, waiter_id, customer_count } = actionData
 
-            // Update table status
-            await supabase
-                .from('tables')
-                .update({
-                    status: 'occupied',
-                    current_waiter_id: waiter_id,
-                    customer_count: customer_count || 1,
-                    occupied_at: new Date().toISOString()
-                })
-                .eq('id', table_id)
+            if (waiter_id && waiter_id !== staffData.id) {
+                const { data: waiter, error } = await supabase.from('staff').select('id')
+                    .eq('id', waiter_id).eq('restaurant_id', targetRestaurantId)
+                    .eq('role', 'waiter').eq('is_active', true).maybeSingle()
+                if (error || !waiter) return NextResponse.json({ error: 'Waiter not found' }, { status: 404 })
+            }
+
+            // Atomic seating with optimistic lock and availability check
+            const seatResult = await OrderService.seatTableAtomic(
+                table_id,
+                waiter_id || staffData.id,
+                customer_count || 1
+            )
+
+            if (!seatResult.success) {
+                return NextResponse.json({ error: seatResult.error }, { status: 400 })
+            }
 
             // Log activity
             await supabase.from('staff_activity_logs').insert({
                 restaurant_id: targetRestaurantId,
-                staff_id: waiter_id,
+                staff_id: waiter_id || staffData.id,
                 action_type: 'table_assigned',
                 action_details: { table_id, customer_count }
             })
 
-            return NextResponse.json({ success: true, message: 'Table assigned' })
+            return NextResponse.json({ success: true, message: 'Table assigned', data: seatResult })
         }
 
         if (action === 'release_table') {
-            // Release table after customer leaves
             const { table_id } = actionData
 
             await supabase
@@ -67,19 +119,64 @@ export async function POST(request: NextRequest) {
                     occupied_at: null
                 })
                 .eq('id', table_id)
+                .eq('restaurant_id', targetRestaurantId)
 
             return NextResponse.json({ success: true, message: 'Table released' })
         }
 
+        if (action === 'transfer_table') {
+            const { from_table_id, to_table_id } = actionData
+            if (!from_table_id || !to_table_id) {
+                return NextResponse.json({ error: 'Both from_table_id and to_table_id are required' }, { status: 400 })
+            }
+
+            const transferResult = await OrderService.transferTableAtomic(
+                from_table_id,
+                to_table_id,
+                staffData.id
+            )
+
+            if (!transferResult.success) {
+                return NextResponse.json({ error: transferResult.error }, { status: 400 })
+            }
+
+            return NextResponse.json({
+                success: true,
+                message: `Table transferred from ${transferResult.from_table_number} to ${transferResult.to_table_number}`,
+                data: transferResult,
+            })
+        }
+
+        if (action === 'merge_tables') {
+            const { source_table_id, target_table_id } = actionData
+            if (!source_table_id || !target_table_id) {
+                return NextResponse.json({ error: 'Both source_table_id and target_table_id are required' }, { status: 400 })
+            }
+
+            const mergeResult = await OrderService.mergeTablesAtomic(
+                source_table_id,
+                target_table_id,
+                staffData.id
+            )
+
+            if (!mergeResult.success) {
+                return NextResponse.json({ error: mergeResult.error }, { status: 400 })
+            }
+
+            return NextResponse.json({
+                success: true,
+                message: mergeResult.message || 'Tables successfully merged',
+                data: mergeResult,
+            })
+        }
+
         if (action === 'get_available_tables') {
-            // Get all tables with availability status
             const { data: tables } = await supabase
                 .from('tables')
                 .select('*')
                 .eq('restaurant_id', targetRestaurantId)
                 .order('table_number')
 
-            // Get available waiters
             const { data: waiters } = await supabase
                 .from('staff')
                 .select('id, name, role')
@@ -93,310 +190,106 @@ export async function POST(request: NextRequest) {
             })
         }
 
-        // ============== ORDER CREATION ==============
+        // ============== ORDER CREATION (ATOMIC) ==============
         if (action === 'create_order') {
-            const { table_id, items, customer_name, notes, is_priority } = actionData
-
-            // Verify table belongs to restaurant
-            const { data: table } = await supabase
-                .from('tables')
-                .select('id, current_waiter_id, restaurant_id')
-                .eq('id', table_id)
-                .single()
-
-            if (!table) {
-                return NextResponse.json({ error: 'Table not found' }, { status: 404 })
+            if (!actionData || !Array.isArray(actionData.items)) {
+                return NextResponse.json({ error: 'Order items are required' }, { status: 400 })
             }
 
-            // Get menu items for price calculation
-            const itemIds = items.map((i: any) => i.menu_item_id)
-            const { data: menuItems } = await supabase
-                .from('menu_items')
-                .select('id, price, name, is_available, preparation_time')
-                .in('id', itemIds)
-
-            // Check availability
-            const unavailable = menuItems?.filter(m => !m.is_available) || []
-            if (unavailable.length > 0) {
-                return NextResponse.json({
-                    error: 'Some items unavailable',
-                    items: unavailable.map((u: any) => u.name)
-                }, { status: 400 })
-            }
-
-            // Calculate totals
-            let subtotal = 0
-            const orderItems = items.map((item: any) => {
-                const menuItem = menuItems?.find(m => m.id === item.menu_item_id)
-                if (!menuItem) return null
-                const qty = Math.max(1, item.quantity || 1)
-                const itemTotal = menuItem.price * qty
-                subtotal += itemTotal
-                return {
-                    menu_item_id: item.menu_item_id,
-                    quantity: qty,
-                    unit_price: menuItem.price,
-                    subtotal: itemTotal,
-                    special_instructions: item.notes || null,
-                    status: 'pending'
-                }
-            }).filter(Boolean)
-
-            // Get restaurant tax rate
-            const { data: restaurant } = await supabase
-                .from('restaurants')
-                .select('tax_rate')
-                .eq('id', targetRestaurantId)
-                .single()
-
-            const taxRate = restaurant?.tax_rate || 0
-            const tax = Math.round(subtotal * taxRate / 100)
-            const total = subtotal + tax
-
-            // Generate order number
-            const { data: lastOrder } = await supabase
-                .from('orders')
-                .select('order_number')
-                .eq('restaurant_id', targetRestaurantId)
-                .order('order_number', { ascending: false })
-                .limit(1)
-                .single()
-
-            const nextOrderNum = (lastOrder?.order_number || 1000) + 1
-
-            // Create order
-            const { data: order, error: orderError } = await supabase
-                .from('orders')
-                .insert({
-                    restaurant_id: targetRestaurantId,
-                    table_id,
-                    staff_id: table.current_waiter_id || staffData.id,
-                    order_number: nextOrderNum,
-                    status: 'pending',
-                    subtotal,
-                    tax,
-                    total,
-                    notes: notes || null,
-                    is_priority: is_priority || false,
-                    customer_name: customer_name || null
-                })
-                .select('id, order_number, status, total')
-                .single()
-
-            if (orderError) {
-                console.error('Order error:', orderError)
-                return NextResponse.json({ error: 'Failed to create order' }, { status: 500 })
-            }
-
-            // Insert order items
-            const orderItemsWithId = orderItems.map((item: any) => ({
-                ...item,
-                order_id: order.id
-            }))
-            await supabase.from('order_items').insert(orderItemsWithId)
-
-            // Add to kitchen queue
-            const maxPrepTime = Math.max(
-                ...(menuItems?.map(m => m.preparation_time || 15) || [15])
-            )
-
-            await supabase.from('kitchen_order_queue').insert({
-                order_id: order.id,
+            const { table_id, items, customer_count, customer_name, notes, is_priority, client_order_id } = actionData
+            const result = await OrderService.createOrderAtomic({
                 restaurant_id: targetRestaurantId,
-                assigned_to: null,
-                priority: is_priority ? 'high' : 'normal',
-                status: 'pending',
-                prep_time_seconds: maxPrepTime * 60
-            })
-
-            // Log activity
-            await supabase.from('staff_activity_logs').insert({
-                restaurant_id: targetRestaurantId,
+                table_id,
                 staff_id: staffData.id,
-                action_type: 'order_created',
-                action_details: { order_id: order.id, table_id, item_count: items.length }
+                order_type: 'dine_in',
+                items: items.map((item: any) => ({
+                    menu_item_id: item?.menu_item_id,
+                    quantity: item?.quantity ?? 1,
+                    special_instructions: typeof item?.special_instructions === 'string'
+                        ? item.special_instructions.slice(0, 500)
+                        : typeof item?.notes === 'string' ? item.notes.slice(0, 500) : null,
+                    modifiers: item?.modifiers,
+                })),
+                notes: typeof notes === 'string' ? notes.slice(0, 500) : null,
+                is_priority: is_priority === true,
+                customer_name: typeof customer_name === 'string' ? customer_name.slice(0, 100) : null,
+                customer_count,
+                source: 'pos',
+                client_order_id: request.headers.get('idempotency-key') ??
+                    request.headers.get('x-idempotency-key') ?? client_order_id,
             })
 
-            // Update staff metrics
-            const today = new Date().toISOString().split('T')[0]
-            const { data: existingMetrics } = await supabase
-                .from('staff_metrics')
-                .select('*')
-                .eq('staff_id', table.current_waiter_id || staffData.id)
-                .eq('date', today)
-                .single()
-
-            if (existingMetrics) {
-                await supabase
-                    .from('staff_metrics')
-                    .update({
-                        orders_taken: (existingMetrics.orders_taken || 0) + 1,
-                        updated_at: new Date().toISOString()
-                    })
-                    .eq('id', existingMetrics.id)
-            } else {
-                await supabase.from('staff_metrics').insert({
-                    staff_id: table.current_waiter_id || staffData.id,
-                    restaurant_id: targetRestaurantId,
-                    date: today,
-                    orders_taken: 1
-                })
+            if (!result.success || !result.order_id) {
+                const status = result.code === 'conflict' ? 409 : result.code === 'internal' ? 500 : 400
+                return NextResponse.json({ error: result.error || 'Failed to create order' }, { status })
             }
 
             return NextResponse.json({
                 success: true,
                 order: {
-                    id: order.id,
-                    order_number: order.order_number,
-                    status: order.status,
-                    subtotal,
-                    tax,
-                    total
-                }
+                    id: result.order_id,
+                    order_number: result.order_number,
+                    subtotal: result.subtotal,
+                    tax: result.tax,
+                    total: result.total,
+                    status: result.status,
+                    idempotent_replay: result.idempotent_replay || false,
+                },
             })
         }
 
-        // ============== KITCHEN ACTIONS ==============
-        if (action === 'kitchen_start') {
-            // Kitchen starts preparing
-            const { order_id } = actionData
 
-            await supabase
-                .from('kitchen_order_queue')
-                .update({
-                    status: 'preparing',
-                    started_at: new Date().toISOString(),
-                    assigned_to: staffData.id
-                })
-                .eq('order_id', order_id)
+        // ============== ITEM FIRE & VOID PROTOCOL ==============
+        if (action === 'void_item') {
+            const { order_item_id, reason } = actionData
 
-            await supabase
-                .from('orders')
-                .update({ status: 'preparing' })
-                .eq('id', order_id)
-
-            // Notify waiter
-            const { data: order } = await supabase
-                .from('orders')
-                .select('table_id, staff_id')
-                .eq('id', order_id)
-                .single()
-
-            if (order?.staff_id) {
-                await supabase.from('staff_alerts').insert({
-                    restaurant_id: targetRestaurantId,
-                    to_staff_id: order.staff_id,
-                    alert_type: 'kitchen_update',
-                    title: 'Order Started',
-                    message: `Order ${order_id.slice(0, 8)} is being prepared`,
-                    priority: 'low'
-                })
+            if (!order_item_id) {
+                return NextResponse.json({ error: 'order_item_id is required' }, { status: 400 })
             }
 
-            return NextResponse.json({ success: true, message: 'Kitchen started preparing' })
-        }
+            const { data: item, error } = await supabase.from('order_items')
+                .select('id, order:orders!inner(restaurant_id)')
+                .eq('id', order_item_id).eq('order.restaurant_id', targetRestaurantId).maybeSingle()
+            if (error || !item) return NextResponse.json({ error: 'Order item not found' }, { status: 404 })
 
-        if (action === 'kitchen_ready') {
-            // Kitchen marks order ready
-            const { order_id } = actionData
+            const voidResult = await OrderService.voidOrderItem(
+                order_item_id,
+                reason || 'Customer request',
+                staffData.id
+            )
 
-            const { data: queueItem } = await supabase
-                .from('kitchen_order_queue')
-                .select('started_at')
-                .eq('order_id', order_id)
-                .single()
-
-            const actualTime = queueItem?.started_at
-                ? Math.round((Date.now() - new Date(queueItem.started_at).getTime()) / 1000)
-                : 0
-
-            await supabase
-                .from('kitchen_order_queue')
-                .update({
-                    status: 'ready',
-                    ready_at: new Date().toISOString(),
-                    actual_prep_time_seconds: actualTime
-                })
-                .eq('order_id', order_id)
-
-            await supabase
-                .from('orders')
-                .update({ status: 'ready' })
-                .eq('id', order_id)
-
-            // Notify assigned waiter
-            const { data: order } = await supabase
-                .from('orders')
-                .select('table_id, staff_id, table:tables(table_number)')
-                .eq('id', order_id)
-                .single()
-
-            if (order?.staff_id) {
-                await supabase.from('staff_alerts').insert({
-                    restaurant_id: targetRestaurantId,
-                    to_staff_id: order.staff_id,
-                    alert_type: 'order_ready',
-                    title: 'Order Ready!',
-                    message: `Order for Table ${(order.table as any)?.table_number || '?'} is ready to serve`,
-                    priority: 'high'
-                })
+            if (!voidResult.success) {
+                return NextResponse.json({ error: voidResult.error }, { status: 400 })
             }
 
-            // Log kitchen performance
-            if (staffData.role === 'kitchen') {
-                const today = new Date().toISOString().split('T')[0]
-                await supabase.from('staff_activity_logs').insert({
-                    restaurant_id: targetRestaurantId,
-                    staff_id: staffData.id,
-                    action_type: 'order_prepared',
-                    action_details: { order_id, prep_time: actualTime },
-                    duration_seconds: actualTime
-                })
-            }
-
-            return NextResponse.json({ success: true, message: 'Order marked ready' })
-        }
-
-        // ============== SERVE & COMPLETE ==============
-        if (action === 'serve_order') {
-            // Waiter serves the order
-            const { order_id } = actionData
-
-            // Update order items status
-            await supabase
-                .from('order_items')
-                .update({ status: 'served' })
-                .eq('order_id', order_id)
-
-            // Update kitchen queue
-            await supabase
-                .from('kitchen_order_queue')
-                .update({ status: 'served', served_at: new Date().toISOString() })
-                .eq('order_id', order_id)
-
-            await supabase
-                .from('orders')
-                .update({ status: 'served' })
-                .eq('id', order_id)
-
-            // Log activity
-            await supabase.from('staff_activity_logs').insert({
-                restaurant_id: targetRestaurantId,
-                staff_id: staffData.id,
-                action_type: 'order_served',
-                action_details: { order_id }
+            return NextResponse.json({
+                success: true,
+                message: voidResult.waste_logged ? 'Item voided and logged to kitchen waste' : 'Item voided successfully',
+                data: voidResult
             })
+        }
 
-            return NextResponse.json({ success: true, message: 'Order served' })
+        const kitchenTarget = kitchenTargets.get(action)
+        if (kitchenTarget) {
+            const orderId = actionData?.order_id
+            if (typeof orderId !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(orderId)) {
+                return NextResponse.json({ error: 'A valid order ID is required' }, { status: 400 })
+            }
+            const result = await OrderService.transitionKitchenOrder(targetRestaurantId, orderId, kitchenTarget, staffData.id)
+            if (!result.success) {
+                const status = result.code === 'conflict' ? 409 : result.code === 'not_found' ? 404 :
+                    result.code === 'internal' ? 500 : 400
+                return NextResponse.json({ error: result.error }, { status })
+            }
+            return NextResponse.json(result)
         }
 
         if (action === 'request_bill') {
-            // Customer requests bill
             const { order_id } = actionData
 
             const { data: order } = await supabase
                 .from('orders')
-                .select('id, total, staff_id')
+                .select('id, total, staff_id, table_id')
                 .eq('id', order_id)
                 .single()
 
@@ -404,147 +297,39 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ error: 'Order not found' }, { status: 404 })
             }
 
-            // Alert cashier
-            const { data: cashiers } = await supabase
-                .from('staff')
-                .select('id')
-                .eq('restaurant_id', targetRestaurantId)
-                .eq('role', 'cashier')
-                .eq('is_active', true)
-
-            if (cashiers?.length) {
-                for (const cashier of cashiers) {
-                    await supabase.from('staff_alerts').insert({
-                        restaurant_id: targetRestaurantId,
-                        to_staff_id: cashier.id,
-                        alert_type: 'bill_request',
-                        title: 'Bill Request',
-                        message: `Bill requested for order #${order_id.slice(0, 8)} - Rs.${order.total}`,
-                        priority: 'medium'
-                    })
-                }
-            }
-
             // Update table status to billing
-            const { data: orderData } = await supabase
-                .from('orders')
-                .select('table_id')
-                .eq('id', order_id)
-                .single()
-
-            if (orderData?.table_id) {
+            if (order.table_id) {
                 await supabase
                     .from('tables')
                     .update({ status: 'billing' })
-                    .eq('id', orderData.table_id)
+                    .eq('id', order.table_id)
             }
 
             return NextResponse.json({ success: true, message: 'Bill requested' })
         }
 
-        // ============== PAYMENT ==============
+        // ============== PAYMENT (ATOMIC) ==============
         if (action === 'process_payment') {
-            const { order_id, payment_method, amount_received, is_partial } = actionData
-
-            // Get order details
-            const { data: order } = await supabase
-                .from('orders')
-                .select('*')
-                .eq('id', order_id)
-                .single()
-
-            if (!order) {
-                return NextResponse.json({ error: 'Order not found' }, { status: 404 })
-            }
-
-            const amount = amount_received || order.total
-            const change = Math.max(0, amount - order.total)
-
-            // Create transaction record
-            await supabase.from('cashier_transactions').insert({
-                restaurant_id: targetRestaurantId,
-                staff_id: staffData.id,
+            const { order_id, payment_method, amount, amount_received, tip, discount, is_split, split_payments } = actionData
+            const payment = await OrderService.settlePaymentAtomic({
                 order_id,
-                transaction_type: 'sale',
-                amount: is_partial ? amount : order.total,
-                payment_method: payment_method || 'cash'
-            })
-
-            // Update order status
-            const newStatus = is_partial ? 'partial_paid' : 'paid'
-            await supabase
-                .from('orders')
-                .update({
-                    status: newStatus,
-                    payment_method: payment_method || 'cash',
-                    amount_paid: (order.amount_paid || 0) + amount,
-                    paid_at: is_partial ? null : new Date().toISOString()
-                })
-                .eq('id', order_id)
-
-            // Update staff metrics
-            const today = new Date().toISOString().split('T')[0]
-            const { data: existingMetrics } = await supabase
-                .from('staff_metrics')
-                .select('*')
-                .eq('staff_id', staffData.id)
-                .eq('date', today)
-                .single()
-
-            if (existingMetrics) {
-                await supabase
-                    .from('staff_metrics')
-                    .update({
-                        revenue_generated: (existingMetrics.revenue_generated || 0) + (is_partial ? amount : order.total),
-                        orders_completed: is_partial ? existingMetrics.orders_completed : (existingMetrics.orders_completed || 0) + 1,
-                        updated_at: new Date().toISOString()
-                    })
-                    .eq('id', existingMetrics.id)
-            } else {
-                await supabase.from('staff_metrics').insert({
-                    staff_id: staffData.id,
-                    restaurant_id: targetRestaurantId,
-                    date: today,
-                    revenue_generated: is_partial ? amount : order.total,
-                    orders_completed: is_partial ? 0 : 1
-                })
-            }
-
-            // Log activity
-            await supabase.from('staff_activity_logs').insert({
                 restaurant_id: targetRestaurantId,
+                request_key: request.headers.get('idempotency-key'),
                 staff_id: staffData.id,
-                action_type: 'payment_processed',
-                action_details: {
-                    order_id,
-                    amount: is_partial ? amount : order.total,
-                    payment_method,
-                    change
-                }
+                payment_method: payment_method || 'cash',
+                amount,
+                cash_received: amount_received,
+                tip,
+                discount,
+                is_split,
+                split_payments,
             })
-
-            // Release table if fully paid
-            if (!is_partial) {
-                await supabase
-                    .from('tables')
-                    .update({
-                        status: 'available',
-                        current_waiter_id: null,
-                        customer_count: null,
-                        occupied_at: null
-                    })
-                    .eq('id', order.table_id)
+            if (!payment.success) {
+                const status = payment.code === 'conflict' ? 409 : payment.code === 'not_found' ? 404 :
+                    payment.code === 'internal' ? 500 : 400
+                return NextResponse.json({ error: payment.error }, { status })
             }
-
-            return NextResponse.json({
-                success: true,
-                payment: {
-                    order_id,
-                    amount_paid: amount,
-                    total: order.total,
-                    change
-                }
-            })
+            return NextResponse.json({ success: true, payment })
         }
 
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
@@ -558,42 +343,46 @@ export async function POST(request: NextRequest) {
 // GET - Fetch current orders/tables for staff
 export async function GET(request: NextRequest) {
     try {
-        const supabase = await createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-
-        if (!user) {
+        const auth = await getAuthenticatedStaff(request)
+        if (!auth) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
+        const supabase = createAdminClient()
+        const staffData = { id: auth.staffId, restaurant_id: auth.restaurantId, role: auth.role }
+
         const { searchParams } = new URL(request.url)
-        const view = searchParams.get('view') // 'tables' | 'kitchen' | 'orders' | 'my_tables'
+        const view = searchParams.get('view')
         const restaurantId = searchParams.get('restaurant_id')
-
-        // Get staff restaurant
-        const { data: staffData } = await supabase
-            .from('staff')
-            .select('id, restaurant_id, role')
-            .eq('user_id', user.id)
-            .single()
-
-        const targetRestaurant = restaurantId || staffData?.restaurant_id
-        if (!targetRestaurant) {
-            return NextResponse.json({ error: 'No restaurant' }, { status: 404 })
+        if (restaurantId && restaurantId !== auth.restaurantId) {
+            return NextResponse.json({ error: 'Access denied for this restaurant' }, { status: 403 })
         }
 
+        const targetRestaurant = auth.restaurantId
+
         if (view === 'tables') {
-            // Manager view - all tables
-            const { data: tables } = await supabase
+            const { data, error } = await supabase
                 .from('tables')
-                .select('*, waiter:staff(name)')
+                .select('*')
                 .eq('restaurant_id', targetRestaurant)
                 .order('table_number')
 
-            return NextResponse.json({ tables: tables || [] })
+            if (error) return NextResponse.json({ error: 'Could not load the floor.' }, { status: 500 })
+            const tables = (data ?? []) as { current_waiter_id?: string | null }[]
+            const waiterIds = [...new Set(tables.flatMap(table => table.current_waiter_id ? [table.current_waiter_id] : []))]
+            const waitersById = new Map<string, string>()
+            if (waiterIds.length) {
+                const { data: waiters } = await supabase.from('staff').select('id, name')
+                    .eq('restaurant_id', targetRestaurant).in('id', waiterIds)
+                for (const waiter of waiters ?? []) waitersById.set(waiter.id, waiter.name)
+            }
+            return NextResponse.json({ tables: tables.map(table => {
+                const name = table.current_waiter_id && waitersById.get(table.current_waiter_id)
+                return { ...table, waiter: name ? { name } : null }
+            }) })
         }
 
         if (view === 'kitchen') {
-            // Kitchen view - order queue
             const { data: queue } = await supabase
                 .from('kitchen_order_queue')
                 .select(`
@@ -608,7 +397,6 @@ export async function GET(request: NextRequest) {
                 .order('priority', { ascending: false })
                 .order('received_at', { ascending: true })
 
-            // Get order items
             const orderIds = (queue || []).map(q => q.order_id)
             const { data: allItems } = await supabase
                 .from('order_items')
@@ -617,14 +405,16 @@ export async function GET(request: NextRequest) {
 
             const queueWithItems = (queue || []).map(q => ({
                 ...q,
-                items: (allItems || []).filter(i => i.order_id === q.order_id)
+                items: (allItems || []).map(i => ({
+                    ...i,
+                    display_name: i.item_name_snapshot || i.menu_item?.name || 'Item'
+                })).filter(i => i.order_id === q.order_id)
             }))
 
             return NextResponse.json({ queue: queueWithItems })
         }
 
         if (view === 'my_tables') {
-            // Waiter view - assigned tables only
             const { data: tables } = await supabase
                 .from('tables')
                 .select('*')
@@ -632,7 +422,6 @@ export async function GET(request: NextRequest) {
                 .eq('current_waiter_id', staffData?.id)
                 .not('status', 'in', '("available")')
 
-            // Get orders for these tables
             const tableIds = (tables || []).map(t => t.id)
             const { data: orders } = await supabase
                 .from('orders')

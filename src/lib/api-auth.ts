@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import type { UserRole } from '@/types'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { readStaffSession } from '@/lib/staff-session'
 
 export interface ApiAuthContext {
     staffId: string
@@ -10,14 +11,26 @@ export interface ApiAuthContext {
     email: string
 }
 
+async function staffContextFromRow(staff: {
+    id: string
+    role: string
+    restaurant_id: string
+    email?: string | null
+}, fallbackEmail = ''): Promise<ApiAuthContext> {
+    return {
+        staffId: staff.id,
+        role: staff.role as UserRole,
+        restaurantId: staff.restaurant_id,
+        email: staff.email || fallbackEmail,
+    }
+}
+
 export async function getAuthenticatedStaff(request: NextRequest): Promise<ApiAuthContext | null> {
     try {
-        // Try cookie-based auth (owner login via Supabase session cookies)
         const supabase = await createClient()
         const { data: { user } } = await supabase.auth.getUser()
 
         if (user) {
-            // Check if they have a staff record
             const { data: staff } = await supabase
                 .from('staff')
                 .select('id, role, restaurant_id, email')
@@ -26,10 +39,9 @@ export async function getAuthenticatedStaff(request: NextRequest): Promise<ApiAu
                 .maybeSingle()
 
             if (staff) {
-                return { staffId: staff.id, role: staff.role as UserRole, restaurantId: staff.restaurant_id, email: staff.email || user.email || '' }
+                return staffContextFromRow(staff, user.email || '')
             }
 
-            // If no staff record but authenticated, check if they own a restaurant
             const { data: restaurant } = await supabase
                 .from('restaurants')
                 .select('id')
@@ -37,20 +49,19 @@ export async function getAuthenticatedStaff(request: NextRequest): Promise<ApiAu
                 .maybeSingle()
 
             if (restaurant) {
-                // Check if owner has a staff record
                 const adminClient = createAdminClient()
                 const { data: ownerStaff } = await adminClient
                     .from('staff')
-                    .select('id, role, restaurant_id, email')
+                    .select('id, role, restaurant_id, email, is_active')
                     .eq('user_id', user.id)
+                    .eq('restaurant_id', restaurant.id)
+                    .eq('role', 'owner')
                     .maybeSingle()
 
-                // If staff record exists, use it
                 if (ownerStaff) {
-                    return { staffId: ownerStaff.id, role: ownerStaff.role as UserRole, restaurantId: ownerStaff.restaurant_id, email: ownerStaff.email || '' }
+                    return ownerStaff.is_active ? staffContextFromRow(ownerStaff, user.email || '') : null
                 }
 
-                // Create staff record for owner if it doesn't exist
                 const { data: newStaff, error } = await adminClient
                     .from('staff')
                     .insert({
@@ -65,32 +76,40 @@ export async function getAuthenticatedStaff(request: NextRequest): Promise<ApiAu
                     .maybeSingle()
 
                 if (newStaff && !error) {
-                    return { staffId: newStaff.id, role: newStaff.role as UserRole, restaurantId: newStaff.restaurant_id, email: newStaff.email || '' }
+                    return staffContextFromRow(newStaff, user.email || '')
                 }
 
-                // Fallback - should not happen
-                return { staffId: user.id, role: 'owner' as UserRole, restaurantId: restaurant.id, email: user.email || '' }
+                // A failed provisioning attempt cannot stand in for an active staff identity.
+                return null
             }
         }
 
-        // Try x-staff-id header (staff mobile login)
-        const staffId = request.headers.get('x-staff-id')
-        if (staffId) {
-            const adminClient = createAdminClient()
-            const { data: staff } = await adminClient
-                .from('staff')
-                .select('id, role, restaurant_id, email, is_active')
-                .eq('id', staffId)
-                .single()
-            if (staff && staff.is_active) {
-                return { staffId: staff.id, role: staff.role as UserRole, restaurantId: staff.restaurant_id, email: staff.email || '' }
-            }
-        }
+        const session = await readStaffSession(request)
+        if (!session) return null
 
-        return null
+        const adminClient = createAdminClient()
+        const { data: staff } = await adminClient
+            .from('staff')
+            .select('id, role, restaurant_id, email, is_active')
+            .eq('id', session.staffId)
+            .eq('restaurant_id', session.restaurantId)
+            .maybeSingle()
+
+        if (!staff || !staff.is_active) return null
+
+        return staffContextFromRow(staff)
     } catch {
         return null
     }
+}
+
+export function assertSameRestaurant(auth: ApiAuthContext, restaurantId: string | null | undefined): boolean {
+    if (!restaurantId) return false
+    return auth.restaurantId === restaurantId
+}
+
+export function tenantMismatchResponse() {
+    return NextResponse.json({ success: false, error: 'Access denied for this restaurant' }, { status: 403 })
 }
 
 export function requireRole(allowedRoles: UserRole[]) {

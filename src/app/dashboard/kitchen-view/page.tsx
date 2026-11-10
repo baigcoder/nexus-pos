@@ -45,7 +45,7 @@ const statusConfig: Record<string, { color: string; label: string; bgColor: stri
 
 // Standalone Kitchen View - no auth store dependency
 export default function KitchenViewPage() {
-  const { success } = useToast()
+  const { success, error: showError } = useToast()
   const supabase = createClient()
 
   const [orders, setOrders] = useState<Order[]>([])
@@ -175,15 +175,20 @@ export default function KitchenViewPage() {
   }, [restaurantId, loadOrders])
 
   const markAsPickedUp = async (orderId: string) => {
-    // Optimistic update
-    setOrders(prev => prev.filter(o => o.id !== orderId))
-
-    await supabase
-      .from('orders')
-      .update({ status: 'served' })
-      .eq('id', orderId)
-
-    success('Order Picked Up', 'Order marked as served')
+    try {
+      const response = await fetch('/api/order-flow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'serve_order', data: { order_id: orderId } }),
+      })
+      const result = await response.json()
+      if (!response.ok || !result.success) throw new Error(result.error || 'Could not mark order as served')
+      setOrders(prev => prev.filter(order => order.id !== orderId))
+      success('Order Picked Up', 'Order marked as served')
+    } catch (error) {
+      showError('Pickup Failed', error instanceof Error ? error.message : 'Could not mark order as served')
+      loadOrders()
+    }
   }
 
   const getTimeAgo = (dateStr: string) => {

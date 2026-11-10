@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { Providers } from '@/components/providers'
+import { appearanceBootstrap } from '@/lib/appearance'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -15,6 +16,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="font-sans" suppressHydrationWarning>
+      <head><script dangerouslySetInnerHTML={{ __html: appearanceBootstrap }} /></head>
       <body className="antialiased" suppressHydrationWarning>
         <Providers>
           {children}

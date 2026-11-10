@@ -36,7 +36,8 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        if (rider_id !== auth.staffId && auth.role !== 'owner' && auth.role !== 'manager') {
+        const isManager = ['owner', 'manager'].includes(auth.role)
+        if (!isManager && (rider_id !== auth.staffId || !['rider', 'delivery'].includes(auth.role))) {
             return NextResponse.json(
                 { error: 'Cannot update another rider location' },
                 { status: 403 }
@@ -44,7 +45,8 @@ export async function POST(request: NextRequest) {
         }
 
         // Validate coordinates
-        if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude) ||
+            latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
             return NextResponse.json(
                 { error: 'Invalid coordinates' },
                 { status: 400 }
@@ -56,6 +58,8 @@ export async function POST(request: NextRequest) {
             .from('staff')
             .select('restaurant_id')
             .eq('id', rider_id)
+            .in('role', ['rider', 'delivery'])
+            .eq('is_active', true)
             .single()
 
         if (staffError || !staff) {
@@ -70,6 +74,24 @@ export async function POST(request: NextRequest) {
                 { error: 'Cannot update rider location for another restaurant' },
                 { status: 403 }
             )
+        }
+
+        if (order_id) {
+            const { data: assignment, error: assignmentError } = await supabase
+                .from('delivery_assignments')
+                .select('id')
+                .eq('restaurant_id', auth.restaurantId)
+                .eq('rider_id', rider_id)
+                .eq('order_id', order_id)
+                .in('status', ['picked_up', 'dispatched', 'out_for_delivery', 'en_route', 'arrived'])
+                .maybeSingle()
+
+            if (assignmentError) {
+                return NextResponse.json({ error: 'Could not verify delivery assignment' }, { status: 500 })
+            }
+            if (!assignment) {
+                return NextResponse.json({ error: 'No active delivery assignment for this rider' }, { status: 403 })
+            }
         }
 
         // Upsert current location
@@ -100,7 +122,7 @@ export async function POST(request: NextRequest) {
 
         // If tracking for a specific order, record in history
         if (order_id) {
-            await supabase
+            const { error: historyError } = await supabase
                 .from('rider_location_history')
                 .insert({
                     rider_id,
@@ -111,6 +133,9 @@ export async function POST(request: NextRequest) {
                     heading,
                     speed,
                 })
+            if (historyError) {
+                return NextResponse.json({ error: 'Failed to record delivery location' }, { status: 500 })
+            }
         }
 
         return NextResponse.json({
@@ -130,9 +155,19 @@ export async function POST(request: NextRequest) {
 // GET /api/delivery/location?rider_id=xxx - Get rider location
 export async function GET(request: NextRequest) {
     try {
+        const auth = await getAuthenticatedStaff(request)
+        if (!auth) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+
         const { searchParams } = new URL(request.url)
         const riderId = searchParams.get('rider_id')
         const orderId = searchParams.get('order_id')
+        const isManager = ['owner', 'manager'].includes(auth.role)
+        const isRider = ['rider', 'delivery'].includes(auth.role)
+        if (!isManager && (!isRider || (riderId && riderId !== auth.staffId))) {
+            return NextResponse.json({ error: 'Location access denied' }, { status: 403 })
+        }
 
         if (!riderId && !orderId) {
             return NextResponse.json(
@@ -149,6 +184,7 @@ export async function GET(request: NextRequest) {
                 .from('rider_locations')
                 .select('*')
                 .eq('rider_id', riderId)
+                .eq('restaurant_id', auth.restaurantId)
                 .single()
 
             if (error || !location) {
@@ -182,6 +218,7 @@ export async function GET(request: NextRequest) {
                     order:orders(id, order_number, status)
                 `)
                 .eq('order_id', orderId)
+                .eq('restaurant_id', auth.restaurantId)
                 .single()
 
             if (assignmentError || !assignment) {
@@ -191,11 +228,16 @@ export async function GET(request: NextRequest) {
                 )
             }
 
+            if (!isManager && assignment.rider_id !== auth.staffId) {
+                return NextResponse.json({ error: 'Delivery assignment not found' }, { status: 404 })
+            }
+
             // Get rider's current location
             const { data: location } = await supabase
                 .from('rider_locations')
                 .select('*')
                 .eq('rider_id', assignment.rider_id)
+                .eq('restaurant_id', auth.restaurantId)
                 .single()
 
             // Calculate ETA if both locations available

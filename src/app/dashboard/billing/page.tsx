@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   CreditCard, Banknote, Smartphone, Check, Receipt, DollarSign,
@@ -23,6 +23,7 @@ interface BillOrder {
   subtotal: number
   tax: number
   total: number
+  amount_paid: number | null
   created_at: string
   order_items: Array<{
     name: string
@@ -44,6 +45,8 @@ export default function BillingPage() {
   const [discountType, setDiscountType] = useState<'percent' | 'fixed'>('percent')
   const [cashReceived, setCashReceived] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
+  const paymentInFlight = useRef(false)
+  const paymentAttempt = useRef<{ body: string; key: string } | null>(null)
 
   const loadOrders = useCallback(async () => {
     if (!restaurant?.id) return
@@ -53,12 +56,13 @@ export default function BillingPage() {
       const { data, error } = await supabase
         .from('orders')
         .select(`
-          id, order_number, status, subtotal, tax, total, created_at,
+          id, order_number, status, subtotal, tax, total, amount_paid, created_at,
           table:tables(table_number),
           order_items:order_items(quantity, subtotal, menu_item:menu_items(name, price))
         `)
         .eq('restaurant_id', restaurant.id)
-        .in('status', ['pending', 'preparing', 'ready', 'served'])
+        .in('status', ['ready', 'served'])
+        .or('payment_method.is.null,payment_method.neq.cash_on_delivery')
         .order('created_at', { ascending: false })
 
       if (error) throw error
@@ -84,13 +88,14 @@ export default function BillingPage() {
 
   const calculateDiscount = () => {
     if (!selectedOrder) return 0
-    if (discountType === 'percent') return Math.round(selectedOrder.subtotal * (discount / 100))
-    return discount
+    const discountAmount = discountType === 'percent'
+      ? Math.round(selectedOrder.subtotal * discount) / 100 : discount
+    return Math.min(discountAmount, Math.max(0, selectedOrder.total - Number(selectedOrder.amount_paid || 0)))
   }
 
   const calculateTotal = () => {
     if (!selectedOrder) return 0
-    return Math.max(0, selectedOrder.total - calculateDiscount())
+    return Math.max(0, selectedOrder.total - Number(selectedOrder.amount_paid || 0) - calculateDiscount())
   }
 
   const calculateChange = () => {
@@ -99,30 +104,37 @@ export default function BillingPage() {
   }
 
   const handleProcessPayment = async () => {
-    if (!selectedOrder) return
+    if (!selectedOrder || paymentInFlight.current) return
+    paymentInFlight.current = true
     setIsProcessing(true)
     try {
+      const body = JSON.stringify({
+        orderId: selectedOrder.id,
+        paymentMethod,
+        cashReceived: paymentMethod === 'cash' ? parseFloat(cashReceived) : undefined,
+        discount: calculateDiscount() || undefined,
+      })
+      if (paymentAttempt.current?.body !== body) {
+        paymentAttempt.current = { body, key: crypto.randomUUID() }
+      }
       const response = await fetch('/api/billing/process-payment', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: selectedOrder.id,
-          paymentMethod,
-          cashReceived: paymentMethod === 'cash' ? parseFloat(cashReceived) : undefined,
-          discount: calculateDiscount() > 0 ? calculateDiscount() : undefined,
-        }),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': paymentAttempt.current.key },
+        body,
       })
       const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Payment failed')
+      if (!response.ok || !result.success) throw new Error(result.error || 'Payment failed')
+      paymentAttempt.current = null
 
       success('Payment Complete', `Order #${selectedOrder.order_number} has been paid.`)
       setSelectedOrder(null)
       setDiscount(0)
       setCashReceived('')
       loadOrders()
-    } catch (err: any) {
-      showError('Payment Failed', err.message || 'Could not process payment')
+    } catch (err) {
+      showError('Payment Failed', err instanceof Error ? err.message : 'Could not process payment')
     } finally {
+      paymentInFlight.current = false
       setIsProcessing(false)
     }
   }

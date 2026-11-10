@@ -42,6 +42,10 @@ export async function POST(request: NextRequest) {
             )
         }
 
+        if (!user.email_confirmed_at) {
+            return NextResponse.json({ error: 'Verify your email before creating a restaurant.' }, { status: 403 })
+        }
+
         const supabase = createAdminClient()
 
         const body = await request.json()
@@ -96,9 +100,11 @@ export async function POST(request: NextRequest) {
                 phone: phone || '',
                 email: email || user.email || '',
                 currency: currency || 'PKR',
-                tax_rate: tax_rate || 16,
+                tax_rate: tax_rate ?? 16,
                 operating_hours: operating_hours || {},
                 is_active: true,
+                plan: 'starter',
+                trial_ends_at: null,
             })
             .select()
             .single()

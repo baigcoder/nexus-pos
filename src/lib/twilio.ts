@@ -33,19 +33,19 @@ export interface NotificationPayload {
 // Message templates
 const messageTemplates: Record<NotificationType, (payload: NotificationPayload) => string> = {
     order_confirmed: (p) =>
-        `🎉 Order Confirmed!\n\nHi ${p.customerName || 'Valued Customer'},\nYour order #${p.orderNumber} has been confirmed.\n\nTrack it here: ${p.trackingUrl}\n\nThank you for ordering!`,
+        `🎉 Order Confirmed!\n\nHi ${p.customerName || 'Valued Customer'},\nYour order #${p.orderNumber} has been confirmed.${p.trackingUrl ? `\n\nTrack it here: ${p.trackingUrl}` : ''}\n\nThank you for ordering!`,
 
     order_preparing: (p) =>
         `👨‍🍳 Kitchen is Cooking!\n\nOrder #${p.orderNumber} is now being prepared.\nEstimated time: ${p.estimatedTime || 20} minutes`,
 
     order_ready: (p) =>
-        `✅ Order Ready!\n\nOrder #${p.orderNumber} is ready${p.riderName ? ` and ${p.riderName} is on the way!` : '!'}\n\nTrack: ${p.trackingUrl}`,
+        `✅ Order Ready!\n\nOrder #${p.orderNumber} is ready${p.riderName ? ` and ${p.riderName} is on the way!` : '!'}${p.trackingUrl ? `\n\nTrack: ${p.trackingUrl}` : ''}`,
 
     rider_assigned: (p) =>
-        `🏍️ Rider Assigned!\n\nYour order #${p.orderNumber} will be delivered by ${p.riderName}.\n\n📞 Contact: ${p.riderPhone}\n🔗 Track: ${p.trackingUrl}`,
+        `🏍️ Rider Assigned!\n\nYour order #${p.orderNumber} will be delivered by ${p.riderName}.\n\n📞 Contact: ${p.riderPhone}${p.trackingUrl ? `\n🔗 Track: ${p.trackingUrl}` : ''}`,
 
     out_for_delivery: (p) =>
-        `🚀 On the Way!\n\nOrder #${p.orderNumber} is out for delivery!\n\nRider: ${p.riderName}\nETA: ${p.estimatedTime || 15} mins\n\n📍 Live Track: ${p.trackingUrl}`,
+        `🚀 On the Way!\n\nOrder #${p.orderNumber} is out for delivery!\n\nRider: ${p.riderName}\nETA: ${p.estimatedTime || 15} mins${p.trackingUrl ? `\n\n📍 Live Track: ${p.trackingUrl}` : ''}`,
 
     delivered: (p) =>
         `🎊 Delivered!\n\nOrder #${p.orderNumber} has been delivered.\n\nThank you for choosing us! ⭐\nWe'd love your feedback.`,
@@ -124,12 +124,4 @@ export async function sendNotification(
     }
 
     return results
-}
-
-/**
- * Generate tracking URL
- */
-export function generateTrackingUrl(orderNumber: number): string {
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://nexuspos.com'
-    return `${baseUrl}/track?order=${orderNumber}`
 }

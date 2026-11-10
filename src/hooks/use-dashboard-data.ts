@@ -85,14 +85,10 @@ export function useDashboardStats() {
                 const yesterdayStart = getStartOfDay(getDaysAgo(1))
                 const yesterdayEnd = getEndOfDay(getDaysAgo(1))
 
-                const safeQuery = async <T>(query: PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> => {
-                    try {
-                        const result = await query
-                        if (result.error) return []
-                        return result.data ?? []
-                    } catch {
-                        return []
-                    }
+                const readRows = async <T>(query: PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> => {
+                    const result = await query
+                    if (result.error) throw new Error(result.error.message)
+                    return result.data ?? []
                 }
 
                 const [
@@ -101,23 +97,23 @@ export function useDashboardStats() {
                     tables,
                     staff,
                 ] = await Promise.all([
-                    safeQuery(getSupabase()
+                    readRows(getSupabase()
                         .from('orders')
                         .select('id, total, status, created_at')
                         .eq('restaurant_id', restaurantId!)
                         .gte('created_at', startOfDay.toISOString())
                         .lte('created_at', endOfDay.toISOString())),
-                    safeQuery(getSupabase()
+                    readRows(getSupabase()
                         .from('orders')
                         .select('id, total')
                         .eq('restaurant_id', restaurantId!)
                         .gte('created_at', yesterdayStart.toISOString())
                         .lte('created_at', yesterdayEnd.toISOString())),
-                    safeQuery(getSupabase()
+                    readRows(getSupabase()
                         .from('tables')
                         .select('id, status')
                         .eq('restaurant_id', restaurantId!)),
-                    safeQuery(getSupabase()
+                    readRows(getSupabase()
                         .from('staff')
                         .select('id, is_active')
                         .eq('restaurant_id', restaurantId!)),

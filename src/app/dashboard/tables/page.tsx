@@ -1,471 +1,261 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
-import {
-  Plus, Users, CheckCircle2, Grid3X3, Edit2, Trash2,
-  Activity, Monitor, Zap, X
-} from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
+import { ArrowUpRight, Grid2X2, Pencil, Plus, RefreshCw, Trash2, Users } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { useToast } from '@/components/ui/toast'
-import { useAuthStore } from '@/stores'
-import { cn } from '@/lib/utils'
+import { hasPermission, useAuthStore } from '@/stores'
 import type { Table, TableStatus } from '@/types'
+import { ReviewDialog, SearchField } from '@/components/service/ServiceOrder'
+import styles from '@/components/service/service-order.module.css'
+import ops from '@/components/service/operations.module.css'
 
-const statusConfig: Record<TableStatus, {
-  label: string
-  bg: string
-  text: string
-  dot: string
-  border: string
-}> = {
-  available: {
-    label: 'Ready',
-    bg: 'bg-emerald-500/10',
-    text: 'text-emerald-500',
-    dot: 'bg-emerald-500',
-    border: 'border-emerald-500/20',
-  },
-  occupied: {
-    label: 'In Service',
-    bg: 'bg-brand-subtle',
-    text: 'text-brand',
-    dot: 'bg-brand',
-    border: 'border-brand/20',
-  },
-  reserved: {
-    label: 'Reserved',
-    bg: 'bg-blue-500/10',
-    text: 'text-blue-500',
-    dot: 'bg-blue-500',
-    border: 'border-blue-500/20',
-  },
-  billing: {
-    label: 'Clearing',
-    bg: 'bg-rose-500/10',
-    text: 'text-rose-500',
-    dot: 'bg-rose-500',
-    border: 'border-rose-500/20',
-  },
+type FloorTable = Table & { waiter?: { name?: string } | null; customer_count?: number | null }
+type Filter = TableStatus | 'all'
+type Dialog = { kind: 'create' } | { kind: 'edit' | 'delete' | 'clear'; table: FloorTable }
+const states: Record<TableStatus, string> = {
+    available: 'Available', occupied: 'In service', reserved: 'Reserved', billing: 'At checkout',
 }
+const collator = new Intl.Collator(undefined, { numeric: true })
 
 export default function TablesPage() {
-  const { restaurant } = useAuthStore()
-  const { success, error: showError } = useToast()
-  const [tables, setTables] = useState<Table[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
-  const [editingTable, setEditingTable] = useState<Table | null>(null)
+    const { restaurant, userRole } = useAuthStore()
+    return restaurant ? (
+        <Floor key={restaurant.id} restaurantId={restaurant.id} canEdit={hasPermission(userRole, 'table:crud')}
+            canUpdate={hasPermission(userRole, 'table:change_status')} canOrder={hasPermission(userRole, 'page:take_order')} />
+    ) : (
+        <section className={`${styles.page} ${ops.page}`}><h1 className={styles.sectionTitle}>Floor tables</h1><p className={styles.empty}>Link a restaurant to view its tables.</p></section>
+    )
+}
 
-  useEffect(() => {
-    if (restaurant?.id) fetchTables()
-  }, [restaurant?.id])
+function Floor({ restaurantId, canEdit, canUpdate, canOrder }: {
+    restaurantId: string; canEdit: boolean; canUpdate: boolean; canOrder: boolean
+}) {
+    const [tables, setTables] = useState<FloorTable[]>([])
+    const [query, setQuery] = useState('')
+    const [filter, setFilter] = useState<Filter>('all')
+    const [refresh, setRefresh] = useState(0)
+    const [loading, setLoading] = useState(true)
+    const [loadError, setLoadError] = useState('')
+    const [actionError, setActionError] = useState('')
+    const [notice, setNotice] = useState('')
+    const [dialog, setDialog] = useState<Dialog | null>(null)
+    const [saving, setSaving] = useState(false)
+    const active = useRef(false)
 
-  const fetchTables = async () => {
-    if (!restaurant?.id) return
-    setIsLoading(true)
-    try {
-      const supabase = createClient()
-      const { data } = await supabase
-        .from('tables')
-        .select('*')
-        .eq('restaurant_id', restaurant.id)
-        .order('table_number', { ascending: true })
-      setTables(data || [])
-    } finally { setIsLoading(false) }
-  }
+    useEffect(() => {
+        let current: AbortController | undefined
+        let stopped = false
 
-  const handleStatusChange = async (tableId: string, newStatus: TableStatus) => {
-    try {
-      const supabase = createClient()
-      const { error } = await supabase
-        .from('tables')
-        .update({ status: newStatus })
-        .eq('id', tableId)
+        async function load() {
+            current?.abort()
+            const request = new AbortController()
+            current = request
+            setLoading(true)
+            try {
+                const response = await fetch('/api/order-flow?view=tables', { signal: request.signal, cache: 'no-store' })
+                const result = await response.json()
+                if (!response.ok || !Array.isArray(result.tables)) throw new Error(result.error || 'Could not load the floor.')
+                if (request.signal.aborted || stopped || active.current) return
+                setTables(result.tables.filter((table: FloorTable) => table.restaurant_id === restaurantId))
+                setLoadError('')
+            } catch (error) {
+                if (!request.signal.aborted && !stopped) setLoadError(error instanceof Error ? error.message : 'Could not load the floor.')
+            } finally {
+                if (!request.signal.aborted && !stopped) setLoading(false)
+            }
+        }
 
-      if (error) throw error
+        void load()
+        const interval = window.setInterval(() => {
+            if (!active.current && document.visibilityState === 'visible') void load()
+        }, 20000)
+        return () => {
+            stopped = true
+            current?.abort()
+            window.clearInterval(interval)
+        }
+    }, [restaurantId, refresh])
 
-      setTables(tables.map(t => t.id === tableId ? { ...t, status: newStatus } : t))
-      success('Status Updated', `Table status updated to ${newStatus}.`)
-    } catch (err: any) { showError('Update Failed', err.message) }
-  }
+    function open(next: Dialog) {
+        setActionError('')
+        setNotice('')
+        setDialog(next)
+    }
 
-  const deleteTable = async (id: string) => {
-    if (!confirm('Are you sure you want to remove this table?')) return
-    try {
-      const supabase = createClient()
-      const { error } = await supabase.from('tables').delete().eq('id', id)
-      if (error) throw error
-      setTables(tables.filter(t => t.id !== id))
-      success('Table Removed', 'The table has been removed.')
-    } catch (err) { showError('Operation Failed', 'Could not delete the table.') }
-  }
+    function close() {
+        setDialog(null)
+        setActionError('')
+    }
 
-  const stats = {
-    total: tables.length,
-    available: tables.filter(t => t.status === 'available').length,
-    occupied: tables.filter(t => t.status === 'occupied').length,
-    capacity: tables.reduce((sum, t) => sum + (t.capacity || 0), 0),
-  }
+    async function run(operation: () => Promise<string>) {
+        if (active.current || loadError) return
+        active.current = true
+        setSaving(true)
+        setActionError('')
+        setNotice('')
+        try {
+            setNotice(await operation())
+            setDialog(null)
+        } catch (error) {
+            setActionError(error instanceof Error ? error.message : 'Could not update the table.')
+        } finally {
+            active.current = false
+            setSaving(false)
+            setRefresh(previous => previous + 1)
+        }
+    }
 
-  return (
-    <div className="min-h-screen bg-[var(--background)]">
-      <div className="p-4 lg:p-6 max-w-7xl mx-auto space-y-8">
-        {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
-          <div>
-            <div className="flex items-center gap-3 mb-3">
-              <span className="px-3 py-1 rounded-full bg-brand-subtle border border-brand/20 text-[10px] font-bold text-brand uppercase tracking-wider">
-                Live Management
-              </span>
+    function change(table: FloorTable, status: TableStatus) {
+        if (!canUpdate) return
+        void run(async () => {
+            const timestamp = new Date().toISOString()
+            const assignment = status === 'available'
+                ? { current_waiter_id: null, customer_count: null, occupied_at: null }
+                : status === 'occupied' ? { occupied_at: timestamp } : {}
+            let update = createClient().from('tables')
+                .update({ ...assignment, status, updated_at: timestamp })
+                .eq('id', table.id).eq('restaurant_id', restaurantId).eq('status', table.status)
+            if (table.updated_at) update = update.eq('updated_at', table.updated_at)
+            const { data, error } = await update.select().maybeSingle()
+            if (error || !data) throw new Error(error?.message || 'The table changed. Refresh and try again.')
+            setTables(previous => previous.map(row => row.id === table.id ? { ...row, ...data, ...(status === 'available' ? { waiter: null } : {}) } : row))
+            return `Table ${table.table_number} is now ${states[status].toLowerCase()}.`
+        })
+    }
+
+    function save(label: string, capacity: number) {
+        if (!canEdit || !dialog || (dialog.kind !== 'create' && dialog.kind !== 'edit')) return
+        const table = dialog.kind === 'edit' ? dialog.table : null
+        void run(async () => {
+            const client = createClient()
+            const payload = { table_number: label, capacity }
+            const { data, error } = await (table
+                ? client.from('tables').update(payload).eq('id', table.id).eq('restaurant_id', restaurantId)
+                : client.from('tables').insert({ ...payload, restaurant_id: restaurantId, status: 'available' }))
+                .select().single()
+            if (error || !data) throw new Error(error?.message || 'Could not save this table.')
+            setTables(previous => table ? previous.map(row => row.id === table.id ? { ...row, ...data } : row) : [...previous, data])
+            return table ? `Table ${label} updated.` : `Table ${label} added to the floor.`
+        })
+    }
+
+    function remove(table: FloorTable) {
+        if (!canEdit) return
+        void run(async () => {
+            const { data, error } = await createClient().from('tables').delete().eq('id', table.id)
+                .eq('restaurant_id', restaurantId).eq('status', table.status).select('id').maybeSingle()
+            if (error || !data) throw new Error(error?.message || 'The table changed. Refresh and try again.')
+            setTables(previous => previous.filter(row => row.id !== table.id))
+            return `Table ${table.table_number} removed.`
+        })
+    }
+
+    const counts = [
+        { label: 'Tables', value: tables.length },
+        { label: 'Available', value: tables.filter(table => table.status === 'available').length },
+        { label: 'In service', value: tables.filter(table => table.status === 'occupied').length },
+        { label: 'Seats', value: tables.reduce((total, table) => total + Number(table.capacity || 0), 0) },
+    ]
+    const needle = query.trim().toLowerCase()
+    const filtered = tables.filter(table => (filter === 'all' || table.status === filter) &&
+        (!needle || String(table.table_number).toLowerCase().includes(needle) || table.waiter?.name?.toLowerCase().includes(needle)))
+        .sort((a, b) => collator.compare(String(a.table_number), String(b.table_number)))
+    const controlsLocked = saving || !!loadError
+
+    return (
+        <section className={`${styles.page} ${ops.page}`} aria-labelledby="floor-title">
+            <header className={styles.stationHead}>
+                <div><p className={styles.kicker}>Floor service</p><h1 id="floor-title">Floor tables</h1><p>See what’s available, in service, reserved, or at checkout.</p></div>
+                <div className={ops.actions}>
+                    <button type="button" className={styles.secondary} disabled={loading || saving} onClick={() => setRefresh(previous => previous + 1)}><RefreshCw size={16} aria-hidden="true" /> {loading ? 'Refreshing…' : 'Refresh'}</button>
+                    {canOrder && <Link href="/dashboard/take-order" className={styles.secondary}>Take an order <ArrowUpRight size={15} aria-hidden="true" /></Link>}
+                    {canEdit && <button type="button" className={styles.primary} disabled={controlsLocked} onClick={() => open({ kind: 'create' })}><Plus size={17} aria-hidden="true" /> Add table</button>}
+                </div>
+            </header>
+            <dl className={styles.shiftStats} aria-label="Floor summary">
+                {counts.map(({ label, value }) => <div key={label}><dt>{label}</dt><dd>{!tables.length && (loading || loadError) ? '—' : value}</dd></div>)}
+            </dl>
+            {loadError && <p className={`${styles.error} mb-3`} role="alert">Couldn’t refresh the floor. {tables.length ? 'Showing the last available tables.' : 'Try refreshing.'}</p>}
+            {actionError && !dialog && <p className={`${styles.error} mb-3`} role="alert">{actionError}</p>}
+            {notice && <p className={`${styles.success} mb-3`} role="status">{notice}</p>}
+            <div className={ops.toolbar}>
+                <SearchField value={query} onChange={setQuery} placeholder="Find a table or waiter" />
+                <div className={ops.filters} role="group" aria-label="Table status">
+                    <button type="button" className={styles.secondary} aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All tables</button>
+                    {(Object.entries(states) as [TableStatus, string][]).map(([status, label]) => (
+                        <button type="button" key={status} className={styles.secondary} aria-pressed={filter === status} onClick={() => setFilter(status)}>{label}</button>
+                    ))}
+                </div>
             </div>
-            <h1 className="text-3xl font-bold text-[var(--text-primary)] tracking-tight">
-              Table <span className="text-brand">Layout</span>
-            </h1>
-            <p className="text-sm text-[var(--text-muted)] mt-1">
-              Interactive floor plan. Monitor seating capacity and service states in real-time.
-            </p>
-          </div>
+            <section className={styles.panel} aria-labelledby="floor-grid-title" aria-busy={loading}>
+                <header className={styles.panelHead}><div><h2 id="floor-grid-title">Table grid</h2><p>{filtered.length} {filtered.length === 1 ? 'table' : 'tables'} shown</p></div><Grid2X2 size={20} aria-hidden="true" /></header>
+                {filtered.length ? (
+                    <div className={`${ops.floorGrid} ${styles.panelBody}`}>
+                        {filtered.map(table => (
+                            <article className={ops.floorTile} data-state={table.status} key={table.id}>
+                                <header className={ops.tileHead}><div><p className={ops.tileLabel}>Table</p><h3>{table.table_number}</h3></div>
+                                    <span className={ops.status} data-state={table.status}>{states[table.status] ?? table.status}</span></header>
+                                <p className={ops.tileSeats}><Users size={16} aria-hidden="true" /> {table.capacity} seats{table.customer_count ? ` · ${table.customer_count} seated` : ''}</p>
+                                {table.waiter?.name && <p className={`${styles.muted} mt-2`}>{table.waiter.name}</p>}
+                                <div className={ops.tileActions}>
+                                    {canUpdate && table.status === 'available' && <button type="button" className={styles.primary} disabled={controlsLocked} aria-label={`Mark table ${table.table_number} in service`} onClick={() => change(table, 'occupied')}>Mark in service</button>}
+                                    {canUpdate && table.status === 'occupied' && <button type="button" className={styles.secondary} disabled={controlsLocked} aria-label={`Mark table ${table.table_number} at checkout`} onClick={() => change(table, 'billing')}>Mark checkout</button>}
+                                    {canUpdate && table.status !== 'available' && <button type="button" className={styles.secondary} disabled={controlsLocked} aria-label={`Clear table ${table.table_number}`} onClick={() => open({ kind: 'clear', table })}>Clear</button>}
+                                    {canEdit && <>
+                                        <button type="button" className={`${styles.secondary} ${ops.iconAction}`} disabled={controlsLocked} aria-label={`Edit table ${table.table_number}`} onClick={() => open({ kind: 'edit', table })}><Pencil size={16} aria-hidden="true" /></button>
+                                        <button type="button" className={`${styles.secondary} ${ops.iconAction}`} disabled={controlsLocked} aria-label={`Remove table ${table.table_number}`} onClick={() => open({ kind: 'delete', table })}><Trash2 size={16} aria-hidden="true" /></button>
+                                    </>}
+                                </div>
+                            </article>
+                        ))}
+                    </div>
+                ) : <p className={styles.empty}>{loading ? 'Loading the floor…' : loadError ? 'Try refreshing the floor.' : tables.length ? 'No tables match these filters.' : 'Add a table to start managing the floor.'}</p>}
+            </section>
 
-          <button
-            onClick={() => setShowModal(true)}
-            className="h-10 px-5 bg-brand hover:bg-brand-hover text-[var(--text-primary)] rounded-lg flex items-center gap-2 transition-all font-medium text-sm shadow-glow"
-          >
-            <Plus className="w-4 h-4" />
-            Add Table
-          </button>
-        </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {[
-            { label: 'Total Tables', value: stats.total, icon: Grid3X3, color: 'text-[var(--text-primary)]', bg: 'bg-[var(--surface-active)]', border: 'border-[var(--border)]' },
-            { label: 'Available', value: stats.available, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' },
-            { label: 'In Use', value: stats.occupied, icon: Activity, color: 'text-brand', bg: 'bg-brand-subtle', border: 'border-brand/20' },
-            { label: 'Total Seats', value: stats.capacity, icon: Users, color: 'text-blue-500', bg: 'bg-blue-500/10', border: 'border-blue-500/20' },
-          ].map((stat, idx) => (
-            <motion.div
-              key={idx}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: idx * 0.05 }}
-              className={cn(
-                "p-4 rounded-xl border flex items-center gap-4",
-                stat.bg, stat.border
-              )}
-            >
-              <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center bg-[var(--surface)]/30", stat.color)}>
-                <stat.icon className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-[var(--text-primary)]">{stat.value}</p>
-                <p className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">{stat.label}</p>
-              </div>
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Status Legend */}
-        <div className="flex flex-wrap items-center gap-3 p-3 bg-[var(--surface-raised)] rounded-lg border border-[var(--border)]">
-          <div className="flex items-center gap-2 mr-2">
-            <Zap className="w-4 h-4 text-brand" />
-            <span className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Status</span>
-          </div>
-          {Object.entries(statusConfig).map(([key, cfg]) => (
-            <div key={key} className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-[var(--surface)] border border-[var(--border)]">
-              <div className={cn("w-2 h-2 rounded-full", cfg.dot)} />
-              <span className="text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">{cfg.label}</span>
-            </div>
-          ))}
-        </div>
-
-        {/* Floor Plan Grid */}
-        <div className="space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="w-1 h-6 bg-brand rounded-full" />
-            <h2 className="text-lg font-semibold text-[var(--text-primary)]">Floor Plan</h2>
-            <span className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider ml-auto">
-              {tables.length} tables
-            </span>
-          </div>
-
-          {isLoading ? (
-            <div className="flex justify-center py-20">
-              <Monitor className="w-8 h-8 animate-spin text-brand" />
-            </div>
-          ) : tables.length === 0 ? (
-            <div className="py-20 flex flex-col items-center justify-center text-center rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface-raised)]">
-              <Grid3X3 className="w-12 h-12 text-[var(--text-muted)] mb-4" />
-              <h3 className="text-lg font-semibold text-[var(--text-primary)]">No Tables Yet</h3>
-              <p className="text-sm text-[var(--text-muted)] mt-1 max-w-sm mb-6">
-                Your restaurant floor is empty. Add your first table to start managing seating.
-              </p>
-              <button
-                onClick={() => setShowModal(true)}
-                className="h-10 px-6 rounded-lg bg-brand hover:bg-brand-hover text-[var(--text-primary)] font-medium text-sm shadow-glow transition-all"
-              >
-                Add First Table
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-              {tables.map((table, idx) => {
-                const cfg = statusConfig[table.status]
-                return (
-                  <motion.div
-                    key={table.id}
-                    initial={{ opacity: 0, y: 12 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: idx * 0.03 }}
-                    className={cn(
-                      "group relative p-5 bg-[var(--surface-raised)] border rounded-xl transition-all hover:border-[var(--border-strong)]",
-                      cfg.border
+            {dialog && (
+                <ReviewDialog title={dialog.kind === 'create' ? 'Add a table' : dialog.kind === 'edit' ? `Edit table ${dialog.table.table_number}` :
+                    dialog.kind === 'delete' ? `Remove table ${dialog.table.table_number}?` : `Clear table ${dialog.table.table_number}?`}
+                    onClose={close} busy={saving}>
+                    {dialog.kind === 'create' || dialog.kind === 'edit' ? (
+                        <TableForm table={dialog.kind === 'edit' ? dialog.table : null} onSubmit={save} disabled={controlsLocked} error={actionError || loadError} />
+                    ) : (
+                        <div className={ops.floorForm}>
+                            <p className={styles.muted}>{dialog.kind === 'delete' ? 'This removes the table from the floor grid.' : 'This marks the table available for the next party.'}</p>
+                            {(actionError || loadError) && <p className={styles.error} role="alert">{actionError || loadError}</p>}
+                            <div className={ops.actions}>
+                                <button type="button" className={styles.secondary} disabled={saving} onClick={close}>Cancel</button>
+                                <button type="button" className={`${styles.primary} ${dialog.kind === 'delete' ? ops.danger : ''}`} disabled={controlsLocked}
+                                    onClick={() => dialog.kind === 'delete' ? remove(dialog.table) : change(dialog.table, 'available')}>
+                                    {saving ? 'Saving…' : dialog.kind === 'delete' ? 'Remove table' : 'Confirm clear'}
+                                </button>
+                            </div>
+                        </div>
                     )}
-                  >
-                    {/* Actions */}
-                    <div className="absolute top-3 right-3 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => { setEditingTable(table); setShowModal(true); }}
-                        className="w-8 h-8 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] flex items-center justify-center transition-all"
-                        aria-label={`Edit table ${table.table_number}`}
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => deleteTable(table.id)}
-                        className="w-8 h-8 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-[var(--text-muted)] hover:text-rose-500 hover:border-rose-500/20 flex items-center justify-center transition-all"
-                        aria-label={`Delete table ${table.table_number}`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                </ReviewDialog>
+            )}
+        </section>
+    )
+}
 
-                    {/* Table Circle */}
-                    <div className="flex flex-col items-center mb-4">
-                      <div className={cn(
-                        "w-20 h-20 rounded-full border-2 flex flex-col items-center justify-center relative bg-[var(--surface)] transition-all",
-                        cfg.border,
-                        "group-hover:scale-105"
-                      )}>
-                        <span className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Table</span>
-                        <span className="text-2xl font-bold text-[var(--text-primary)]">{table.table_number}</span>
-                        <div className={cn(
-                          "absolute -top-1 -right-1 w-4 h-4 rounded-full border-2 border-[var(--surface)]",
-                          cfg.dot,
-                          (table.status === 'occupied' || table.status === 'billing') && 'animate-pulse'
-                        )} />
-                      </div>
-                    </div>
-
-                    <div className="text-center space-y-2">
-                      <div className="flex items-center justify-center gap-1.5 text-xs text-[var(--text-muted)]">
-                        <Users className="w-3 h-3" />
-                        <span className="font-medium">{table.capacity} Seats</span>
-                      </div>
-
-                      <span className={cn(
-                        "inline-flex px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border",
-                        cfg.bg, cfg.text, cfg.border
-                      )}>
-                        {cfg.label}
-                      </span>
-                    </div>
-
-                    {/* Quick Actions */}
-                    <div className="mt-4 pt-3 border-t border-[var(--border)] flex gap-2">
-                      {table.status !== 'available' && (
-                        <button
-                          onClick={() => handleStatusChange(table.id, 'available')}
-                          className="flex-1 h-8 rounded-md bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-[var(--text-primary)] font-semibold text-[10px] uppercase tracking-wider transition-all border border-emerald-500/20"
-                        >
-                          Clear
-                        </button>
-                      )}
-                      {table.status === 'available' && (
-                        <button
-                          onClick={() => handleStatusChange(table.id, 'occupied')}
-                          className="flex-1 h-8 rounded-md bg-brand-subtle hover:bg-brand text-brand hover:text-[var(--text-primary)] font-semibold text-[10px] uppercase tracking-wider transition-all border border-brand/20"
-                        >
-                          Engage
-                        </button>
-                      )}
-                      {table.status === 'occupied' && (
-                        <button
-                          onClick={() => handleStatusChange(table.id, 'billing')}
-                          className="flex-1 h-8 rounded-md bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-[var(--text-primary)] font-semibold text-[10px] uppercase tracking-wider transition-all border border-rose-500/20"
-                        >
-                          Bill
-                        </button>
-                      )}
-                    </div>
-                  </motion.div>
-                )
-              })}
+function TableForm({ table, onSubmit, disabled, error }: {
+    table: FloorTable | null; onSubmit: (label: string, capacity: number) => void; disabled: boolean; error: string
+}) {
+    const [label, setLabel] = useState(String(table?.table_number ?? ''))
+    const [seats, setSeats] = useState(String(table?.capacity || 4))
+    return (
+        <form className={ops.floorForm} onSubmit={event => {
+            event.preventDefault()
+            if (label.trim() && Number.isInteger(Number(seats)) && Number(seats) > 0) onSubmit(label.trim(), Number(seats))
+        }}>
+            <label className={styles.field}>Table name or number<input value={label} required disabled={disabled} onChange={event => setLabel(event.target.value)} /></label>
+            <div className={ops.capacity} role="group" aria-label="Common seat counts">
+                {[2, 4, 6, 8].map(count => <button type="button" key={count} className={styles.secondary} disabled={disabled} aria-pressed={Number(seats) === count}
+                    onClick={() => setSeats(String(count))}>{count}</button>)}
             </div>
-          )}
-        </div>
-
-        {/* Modal */}
-        {showModal && (
-          <Modal
-            isOpen={showModal}
-            onClose={() => { setShowModal(false); setEditingTable(null); }}
-            title={editingTable ? `Edit Table ${editingTable.table_number}` : 'Add New Table'}
-            size="md"
-          >
-            <TableForm
-              table={editingTable}
-              restaurantId={restaurant?.id || ''}
-              onSuccess={() => { fetchTables(); setShowModal(false); setEditingTable(null); }}
-              onCancel={() => { setShowModal(false); setEditingTable(null); }}
-            />
-          </Modal>
-        )}
-      </div>
-    </div>
-  )
-}
-
-/* ============================================
-  TABLE FORM
-  ============================================ */
-
-function TableForm({ table, restaurantId, onSuccess, onCancel }: {
-  table: Table | null
-  restaurantId: string
-  onSuccess: () => void
-  onCancel: () => void
-}) {
-  const [isLoading, setIsLoading] = useState(false)
-  const [tableNumber, setTableNumber] = useState(table?.table_number || '')
-  const [capacity, setCapacity] = useState(table?.capacity || 4)
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsLoading(true)
-    try {
-      const supabase = createClient()
-      const payload = {
-        restaurant_id: restaurantId,
-        table_number: tableNumber,
-        capacity,
-        status: table?.status || 'available'
-      }
-
-      if (table) {
-        const { error } = await supabase.from('tables').update(payload).eq('id', table.id)
-        if (error) throw error
-      } else {
-        const { error } = await supabase.from('tables').insert(payload)
-        if (error) throw error
-      }
-      onSuccess()
-    } catch (err) { console.error(err) } finally { setIsLoading(false) }
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <div className="space-y-4">
-        <div>
-          <label htmlFor="table-number" className="label mb-2 block">Table Name / Number</label>
-          <input
-            id="table-number"
-            type="text"
-            value={tableNumber}
-            onChange={(e) => setTableNumber(e.target.value)}
-            placeholder="e.g. Table 01, Window Side"
-            required
-            className="w-full h-11 bg-[var(--surface)] border border-[var(--border)] rounded-lg px-4 text-sm text-[var(--text-primary)] outline-none focus:border-brand/50 focus:ring-1 focus:ring-brand/20 transition-all placeholder:text-[var(--text-muted)]"
-          />
-        </div>
-
-        <div>
-          <label className="label mb-2 block">Standard Seating</label>
-          <div className="grid grid-cols-4 gap-3">
-            {[2, 4, 6, 8].map((cap) => (
-              <button
-                key={cap}
-                type="button"
-                onClick={() => setCapacity(cap)}
-                className={cn(
-                  "h-11 rounded-lg font-semibold text-sm transition-all border",
-                  capacity === cap
-                    ? 'bg-brand border-brand text-[var(--text-primary)] shadow-glow'
-                    : 'bg-[var(--surface)] border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
-                )}
-              >
-                {cap}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <label htmlFor="table-capacity" className="label mb-2 block">Custom Capacity</label>
-          <input
-            id="table-capacity"
-            type="number"
-            value={capacity}
-            onChange={(e) => setCapacity(parseInt(e.target.value) || 0)}
-            placeholder="Seats"
-            className="w-full h-11 bg-[var(--surface)] border border-[var(--border)] rounded-lg px-4 text-sm text-[var(--text-primary)] outline-none focus:border-brand/50 focus:ring-1 focus:ring-brand/20 transition-all placeholder:text-[var(--text-muted)]"
-          />
-        </div>
-      </div>
-
-      <div className="flex gap-3 pt-4 border-t border-[var(--border)]">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="flex-1 h-11 rounded-lg font-medium text-sm border border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-all"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={isLoading}
-          className="flex-1 h-11 rounded-lg bg-brand hover:bg-brand-hover text-[var(--text-primary)] font-medium text-sm shadow-glow flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
-        >
-          {isLoading ? <Monitor className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-          {table ? 'Update Table' : 'Create Table'}
-        </button>
-      </div>
-    </form>
-  )
-}
-
-/* ============================================
-  MODAL
-  ============================================ */
-
-function Modal({ isOpen, onClose, title, children, size = 'md' }: {
-  isOpen: boolean
-  onClose: () => void
-  title: string
-  children: React.ReactNode
-  size?: 'sm' | 'md' | 'lg' | 'xl'
-}) {
-  const sizes = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' }
-  if (!isOpen) return null
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-[var(--surface)]/60 backdrop-blur-sm" onClick={onClose} />
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 10 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        className={cn(
-          "relative bg-[var(--surface-raised)] border border-[var(--border)] rounded-xl shadow-2xl w-full max-h-[90vh] flex flex-col overflow-hidden",
-          sizes[size]
-        )}
-      >
-        <div className="p-4 border-b border-[var(--border)] flex items-center justify-between">
-          <h2 className="text-base font-semibold text-[var(--text-primary)]">{title}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[var(--surface-hover)] text-[var(--text-muted)] transition-colors" aria-label="Close modal">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        <div className="p-5 overflow-y-auto">{children}</div>
-      </motion.div>
-    </div>
-  )
+            <label className={styles.field}>Seats<input type="number" min={1} step={1} value={seats} required disabled={disabled} onChange={event => setSeats(event.target.value)} /></label>
+            {error && <p className={styles.error} role="alert">{error}</p>}
+            <button type="submit" className={styles.primary} disabled={disabled || !label.trim()}>{table ? 'Save table' : 'Create table'}</button>
+        </form>
+    )
 }

@@ -9,13 +9,15 @@ import {
     Receipt, BarChart3, Users, Settings, LogOut, Menu, Bell, ChevronDown,
     Shield, Activity, TrendingUp, Star, Truck, Award, QrCode,
     Clock, DollarSign, Tv, ChevronRight, LifeBuoy, MessageCircle,
-    UserCircle, Store, CalendarClock, BadgeCheck, UserCog,
+    UserCircle, Store, CalendarClock, BadgeCheck, UserCog, Sparkles, Gift,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuthStore, hasPermission } from '@/stores'
+import { isTrialExpired, trialDaysRemaining } from '@/lib/plan'
 import { useToast } from '@/components/ui/toast'
 import { ChatWidget } from '@/components/chat/ChatWidget'
 import { AuthGuard } from '@/components/AuthGuard'
+import { AppearanceControl } from '@/components/AppearanceControl'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useUnreadNotifications } from '@/hooks/use-unread-notifications'
 import { cn } from '@/lib/utils'
@@ -52,6 +54,7 @@ const navSections: NavSection[] = [
         items: [
             { href: '/dashboard', label: 'Overview', icon: LayoutDashboard, permission: 'page:dashboard' },
             { href: '/dashboard/orders', label: 'Orders', icon: ClipboardList, permission: 'page:orders' },
+            { href: '/dashboard/order-desk', label: 'Order desk', icon: ClipboardList, permission: 'page:order_desk' },
             { href: '/dashboard/tables', label: 'Tables', icon: Grid3X3, permission: 'page:tables' },
             { href: '/dashboard/menu', label: 'Menu', icon: UtensilsCrossed, permission: 'page:menu' },
             { href: '/dashboard/kitchen', label: 'Kitchen', icon: ChefHat, permission: 'page:kitchen' },
@@ -76,6 +79,9 @@ const navSections: NavSection[] = [
             { href: '/dashboard/inventory', label: 'Inventory', icon: ClipboardList, permission: 'page:inventory' },
             { href: '/dashboard/reservations', label: 'Reservations', icon: Users, permission: 'page:reservations' },
             { href: '/dashboard/discounts', label: 'Discounts', icon: Award, permission: 'page:discounts' },
+            { href: '/dashboard/specials', label: 'Specials', icon: Sparkles, permission: 'page:specials' },
+            { href: '/dashboard/loyalty', label: 'Loyalty', icon: Gift, permission: 'page:loyalty' },
+            { href: '/dashboard/franchise', label: 'Locations', icon: Store, permission: 'page:franchise' },
             { href: '/dashboard/delivery-monitor', label: 'Delivery', icon: Truck, permission: 'page:delivery_monitor' },
             { href: '/dashboard/riders', label: 'Riders', icon: Truck, permission: 'page:riders' },
         ]
@@ -133,6 +139,7 @@ const routePermissionMap: Record<string, Permission> = {
     '/dashboard/settings': 'page:settings',
     '/dashboard/messages': 'page:messages',
     '/dashboard/order-desk': 'page:order_desk',
+    '/dashboard/franchise': 'page:franchise',
 }
 
 const roleHomeRoutes: Record<UserRole, string> = {
@@ -168,8 +175,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['Operations']))
     const unreadCount = useUnreadNotifications()
 
-    const effectiveRole: UserRole = userRole || staff?.role || 'owner'
-    const rc = roleColors[effectiveRole]
+    const effectiveRole: UserRole | null = userRole || staff?.role || null
+    const rc = effectiveRole
+        ? roleColors[effectiveRole]
+        : { bg: 'bg-white/5', text: 'text-slate-400', dot: 'bg-slate-500' }
 
     /* ---- Load context ---- */
     useEffect(() => {
@@ -229,11 +238,16 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     }, [])
 
     const handleLogout = async () => {
+        try {
+            await fetch('/api/auth/staff-logout', { method: 'POST' })
+        } catch {
+            // cookie clear is best-effort
+        }
         const supabase = createClient()
         await supabase.auth.signOut()
         logoutStore()
         success('Logged Out', 'You have been successfully logged out.')
-        router.push('/login')
+        router.push(staff ? '/staff-login' : '/login')
     }
 
     const displayName = staff?.name || user?.full_name || user?.email?.split('@')[0] || 'User'
@@ -430,6 +444,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                             </Badge>
                         )}
 
+                        <AppearanceControl />
+
                         {/* Notifications */}
                         <DropdownMenu>
                             <DropdownMenuTrigger
@@ -492,7 +508,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
                                 <div className="grid grid-cols-2 gap-2 p-3 border-b border-[var(--border)]">
                                     <AccountInfoTile icon={Store} label="Restaurant" value={restaurant?.name || 'Not linked'} />
-                                    <AccountInfoTile icon={UserCog} label="Role" value={effectiveRole} />
+                                    <AccountInfoTile icon={UserCog} label="Role" value={effectiveRole || '…'} />
                                     <AccountInfoTile icon={Shield} label="Account" value={isOwnerAccount ? 'Owner' : 'Staff'} />
                                     <AccountInfoTile icon={Bell} label="Alerts" value={unreadCount > 0 ? `${unreadCount} unread` : 'Clear'} />
                                 </div>
@@ -535,6 +551,16 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
                 {/* Main */}
                 <main id="main-content" className="flex-1 w-full overflow-x-hidden">
+                    {isTrialExpired(restaurant) && (
+                        <div className="px-4 py-3 bg-amber-500/10 border-b border-amber-500/20 text-amber-200 text-sm">
+                            Your 14-day trial has ended. Existing data stays readable. New orders are paused until the owner upgrades the plan in Settings.
+                        </div>
+                    )}
+                    {!isTrialExpired(restaurant) && trialDaysRemaining(restaurant) !== null && trialDaysRemaining(restaurant)! <= 3 && (
+                        <div className="px-4 py-3 bg-brand/10 border-b border-brand/20 text-[var(--text-secondary)] text-sm">
+                            Trial: {trialDaysRemaining(restaurant)} day{trialDaysRemaining(restaurant) === 1 ? '' : 's'} remaining.
+                        </div>
+                    )}
                     <div className={cn(
                         "w-full",
                         ['/dashboard/order-desk', '/dashboard/orders', '/dashboard/billing', '/dashboard/tables', '/dashboard/menu', '/dashboard/kitchen', '/dashboard/messages'].includes(pathname)

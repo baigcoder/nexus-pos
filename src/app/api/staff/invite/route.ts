@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { generateTempPin } from '@/lib/pin-utils'
 import { sendStaffInviteEmail } from '@/lib/email'
 import { requireOwner } from '@/lib/api-auth'
+import { STARTER_STAFF_CAP, isPaidPlan } from '@/lib/plan'
 import {
     sanitizeEmail,
     getClientIp,
@@ -129,8 +130,9 @@ export async function POST(request: NextRequest) {
         // --- Verify restaurant exists ---
         const { data: restaurant, error: restError } = await supabase
             .from('restaurants')
-            .select('id, name')
+            .select('id, name, plan, trial_ends_at')
             .eq('id', restaurantId)
+            .eq('id', auth.restaurantId)
             .single()
 
         if (restError || !restaurant) {
@@ -138,6 +140,28 @@ export async function POST(request: NextRequest) {
                 { success: false, error: 'Restaurant not found' },
                 { status: 404 }
             )
+        }
+
+        if (restaurantId !== auth.restaurantId) {
+            return NextResponse.json({ success: false, error: 'Access denied for this restaurant' }, { status: 403 })
+        }
+
+        if (!isPaidPlan(restaurant.plan) && restaurant.trial_ends_at) {
+            const { count } = await supabase
+                .from('staff')
+                .select('id', { count: 'exact', head: true })
+                .eq('restaurant_id', restaurantId)
+                .eq('is_active', true)
+
+            if ((count || 0) >= STARTER_STAFF_CAP) {
+                return NextResponse.json(
+                    {
+                        success: false,
+                        error: `Starter plan allows up to ${STARTER_STAFF_CAP} staff members. Upgrade to invite more.`,
+                    },
+                    { status: 403 }
+                )
+            }
         }
 
         // --- Check for duplicate email within same restaurant ---

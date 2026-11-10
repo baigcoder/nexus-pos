@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useState } from 'react'
+import { useToast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
 import {
   ChefHat, Wine, Monitor, Users, QrCode, Edit, Copy, Trash2,
@@ -50,6 +51,33 @@ const TEMPLATE_ICONS = {
 }
 
 export function DisplayCard({ display, analytics, onEdit, onDuplicate, onDelete }: DisplayCardProps) {
+  const { success, error: showError } = useToast()
+  const [pairingBusy, setPairingBusy] = useState(false)
+
+  async function manageDevice(action: 'issue' | 'revoke') {
+    if (pairingBusy) return
+    if (action === 'revoke' && !window.confirm('Disconnect all devices paired to this display?')) return
+    setShowMenu(false)
+    setPairingBusy(true)
+    try {
+      const response = await fetch('/api/display/device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, displayId: display.id }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Display action failed')
+      if (action === 'issue') {
+        window.prompt(`Open /screen-login on the device. Use display slug "${data.slug}". This code expires in 10 minutes.`, data.code)
+      } else {
+        success('Devices disconnected', 'Generate a new pairing code to reconnect a device.')
+      }
+    } catch (error) {
+      showError('Display error', error instanceof Error ? error.message : 'Display action failed')
+    } finally {
+      setPairingBusy(false)
+    }
+  }
   const [showMenu, setShowMenu] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
 
@@ -136,7 +164,7 @@ export function DisplayCard({ display, analytics, onEdit, onDuplicate, onDelete 
                   className="absolute right-0 top-full mt-1 z-50 bg-neutral-900 border border-neutral-800 rounded-xl shadow-2xl p-1 min-w-[160px]"
                 >
                   <Link
-                    href={`/display/${display.slug}`}
+                    href={`/display/${display.slug}?preview=1`}
                     className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-neutral-800 text-sm transition-colors"
                     onClick={() => setShowMenu(false)}
                   >
@@ -156,6 +184,20 @@ export function DisplayCard({ display, analytics, onEdit, onDuplicate, onDelete 
                   >
                     <Copy className="w-4 h-4 text-purple-500" />
                     Duplicate
+                  </button>
+                  <button
+                    disabled={pairingBusy || !display.is_active}
+                    onClick={() => manageDevice('issue')}
+                    className="w-full px-3 py-2 text-left text-sm disabled:opacity-50"
+                  >
+                    Pair device
+                  </button>
+                  <button
+                    disabled={pairingBusy}
+                    onClick={() => manageDevice('revoke')}
+                    className="w-full px-3 py-2 text-left text-sm disabled:opacity-50"
+                  >
+                    Disconnect devices
                   </button>
                   <hr className="my-1 border-neutral-800" />
                   <button
@@ -217,7 +259,7 @@ export function DisplayCard({ display, analytics, onEdit, onDuplicate, onDelete 
         {/* Actions */}
         <div className="flex gap-2 mt-4">
           <Link
-            href={`/display/${display.slug}`}
+            href={`/display/${display.slug}?preview=1`}
             className={cn(
               "flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all",
               "bg-orange-600 hover:bg-orange-700 text-white"

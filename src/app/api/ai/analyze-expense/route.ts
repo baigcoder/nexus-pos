@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { analyzeExpenseWithAI } from '@/lib/minimax-ai'
+import { requireManagerOrOwner } from '@/lib/api-auth'
 
 const OPENROUTER_API_URL = process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_API_KEY = process.env.OPEN_ROUTER_API_KEY || ''
@@ -31,6 +32,9 @@ Respond ONLY with JSON matching this schema:
 
 export async function POST(request: NextRequest) {
     try {
+        const { response: authResponse } = await requireManagerOrOwner()(request)
+        if (authResponse) return authResponse
+
         const body = await request.json()
         const { text, amount } = body
 

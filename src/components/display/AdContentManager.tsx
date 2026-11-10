@@ -1,808 +1,341 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import Link from 'next/link'
+import { ArrowUpRight, Film, ImageIcon, Link2, Monitor, Play, Plus, Upload } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { cn } from '@/lib/utils'
-import { useToast } from '@/components/ui/toast'
-import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { withStaffAuthHeaders } from '@/lib/staff-api'
-import {
-  Plus, Trash2, Edit2, Copy, GripVertical, X,
-  Image as LucideImage, Video, Youtube, Link as LinkIcon, Clock,
-  Check, ChevronUp, ChevronDown, ToggleLeft, ToggleRight,
-  Upload, ExternalLink, Eye, EyeOff
-} from 'lucide-react'
-import type { AdContent, AdContentType } from '@/types/display'
-import Image from 'next/image'
+import { ReviewDialog } from '@/components/service/ServiceOrder'
+import work from '@/components/service/service-order.module.css'
+import type { AdContent, AdContentType, Display } from '@/types/display'
+import { httpsUrl, SignageArtwork, youtubeId } from './SignageArtwork'
+import styles from './signage.module.css'
 
-interface AdContentManagerProps {
-  restaurantId: string
-  displayId?: string
-  canManage?: boolean
+type Screen = Pick<Display, 'id' | 'name' | 'slug' | 'is_active'>
+type AdDraft = Pick<AdContent, 'display_id' | 'title' | 'description' | 'media_url' | 'media_type' | 'duration_seconds' |
+    'background_color' | 'text_color' | 'cta_text' | 'cta_url' | 'is_active' | 'schedule_start' | 'schedule_end'>
+const formats = { image: 'Image', video: 'Video', youtube: 'YouTube', url: 'Linked image' }
+const library = 'library'
+
+function status(item: AdContent, screens: Screen[], now: number) {
+    if (!item.is_active) return 'Paused'
+    if (item.display_id && !screens.some(screen => screen.id === item.display_id && screen.is_active)) return 'Screen disabled'
+    if (item.schedule_end && Date.parse(item.schedule_end) <= now) return 'Ended'
+    if (item.schedule_start && Date.parse(item.schedule_start) > now) return 'Scheduled'
+    return 'Eligible'
 }
 
-export function AdContentManager({ restaurantId, displayId, canManage = false }: AdContentManagerProps) {
-  const [contents, setContents] = useState<AdContent[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [isModalOpen, setIsModalOpen] = useState(false)
-  const [editingItem, setEditingItem] = useState<AdContent | null>(null)
-  const [isBulkImport, setIsBulkImport] = useState(false)
-  const [bulkUrls, setBulkUrls] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState<AdContent | null>(null)
-  const [isDeleting, setIsDeleting] = useState(false)
-  const { success, error: showError, warning } = useToast()
+export function AdContentManager({ restaurantId, displayId, canManage = false }: { restaurantId: string; displayId?: string; canManage?: boolean }) {
+    const db = createClient()
+    const [contents, setContents] = useState<AdContent[]>([])
+    const [screens, setScreens] = useState<Screen[]>([])
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState('')
+    const [notice, setNotice] = useState('')
+    const [scope, setScope] = useState(displayId || library)
+    const [selectedId, setSelectedId] = useState<string>()
+    const [playing, setPlaying] = useState(false)
+    const [editor, setEditor] = useState<AdContent | 'new'>()
+    const [deleting, setDeleting] = useState<AdContent>()
+    const [bulk, setBulk] = useState(false)
+    const [bulkUrls, setBulkUrls] = useState('')
+    const [busy, setBusy] = useState(false)
+    const [actionError, setActionError] = useState('')
+    const [now, setNow] = useState(0)
+    const lock = useRef(false)
 
-  const supabase = createClient()
+    const load = useCallback(async (signal?: AbortSignal) => {
+        try {
+            const ads = db.from('ad_content').select('*').eq('restaurant_id', restaurantId).order('display_order').order('id')
+            const targets = db.from('displays').select('id, name, slug, is_active').eq('restaurant_id', restaurantId)
+                .in('type', ['advertisement', 'waiting']).order('name')
+            const [items, locations] = await Promise.all([signal ? ads.abortSignal(signal) : ads, signal ? targets.abortSignal(signal) : targets])
+            if (signal?.aborted) return
+            if (items.error || locations.error) throw new Error('The signage library could not load. Try refreshing.')
+            setContents((items.data || []) as AdContent[])
+            setScreens((locations.data || []) as Screen[])
+            setError('')
+            setNow(Date.now())
+        } catch (failure) {
+            if (!signal?.aborted) setError(failure instanceof Error ? failure.message : 'Could not load signage.')
+        } finally {
+            if (!signal?.aborted) setLoading(false)
+        }
+    }, [db, restaurantId])
 
-  const loadContent = useCallback(async () => {
-    setIsLoading(true)
-    let query = supabase
-      .from('ad_content')
-      .select('*')
-      .eq('restaurant_id', restaurantId)
-      .order('display_order', { ascending: true })
+    useEffect(() => {
+        const request = new AbortController()
+        void load(request.signal)
+        const timer = window.setInterval(() => setNow(Date.now()), 30_000)
+        return () => { request.abort(); window.clearInterval(timer) }
+    }, [load])
 
-    if (displayId) {
-      query = query.eq('display_id', displayId)
+    const screen = screens.find(item => item.id === scope)
+    const queue = scope === library ? contents : contents.filter(item => !item.display_id || item.display_id === scope)
+    const selected = queue.find(item => item.id === selectedId) || queue[0]
+    const target = screen?.id || null
+    const last = Math.max(-1, ...contents.map(item => item.display_order)) + 1
+    const mediaPreview = selected?.media_type === 'video' || selected?.media_type === 'youtube'
+
+    async function mutate(action: () => Promise<void>, message: string, after?: () => void) {
+        if (!canManage || lock.current || error) return
+        lock.current = true
+        setBusy(true)
+        setActionError('')
+        setNotice('')
+        try {
+            await action()
+            after?.()
+            await load()
+            setNotice(message)
+        } catch (failure) {
+            setActionError(failure instanceof Error ? failure.message : 'The change could not be saved.')
+        } finally {
+            lock.current = false
+            setBusy(false)
+        }
     }
 
-    const { data, error } = await query
-    if (error) {
-      showError('Load Failed', error.message)
-    }
-    if (data) setContents(data)
-    setIsLoading(false)
-  }, [restaurantId, displayId, supabase, showError])
-
-  useEffect(() => {
-    loadContent()
-  }, [loadContent])
-
-  const handleSave = async (item: Partial<AdContent>) => {
-    if (!canManage) {
-      warning('Owner Required', 'Only the restaurant owner can change advertisement content.')
-      return
+    async function update(id: string, changes: Partial<AdContent>) {
+        const { data, error } = await db.from('ad_content').update(changes).eq('id', id).eq('restaurant_id', restaurantId).select('id').maybeSingle()
+        if (error || !data) throw new Error(error?.message || 'The slide is no longer available.')
     }
 
-    let result
-    if (editingItem) {
-      result = await supabase
-        .from('ad_content')
-        .update(item)
-        .eq('id', editingItem.id)
-        .eq('restaurant_id', restaurantId)
-    } else {
-      result = await supabase.from('ad_content').insert({ ...item, restaurant_id: restaurantId })
+    function save(values: AdDraft, upload?: () => Promise<string>) {
+        const existing = editor && editor !== 'new' ? editor : undefined
+        return mutate(async () => {
+            const draft = upload ? { ...values, media_url: await upload() } : values
+            if (existing) await update(existing.id, draft)
+            else {
+                const { data, error } = await db.from('ad_content')
+                    .insert({ ...draft, display_order: last, restaurant_id: restaurantId }).select('id').single()
+                if (error || !data) throw new Error(error?.message || 'Could not save the slide.')
+                setSelectedId(data.id)
+            }
+            if (scope !== library && draft.display_id && draft.display_id !== scope) setScope(draft.display_id)
+        }, existing ? 'Slide updated.' : 'Slide added to the playlist.', () => { setEditor(undefined); setPlaying(false) })
     }
 
-    if (result.error) {
-      showError(editingItem ? 'Update Failed' : 'Create Failed', result.error.message)
-      return
+    function duplicate(item: AdContent) {
+        const { display_id, description, media_url, media_type, duration_seconds, background_color, text_color, cta_text, cta_url, schedule_start, schedule_end } = item
+        void mutate(async () => {
+            const { data, error } = await db.from('ad_content').insert({
+                restaurant_id: restaurantId, display_id, description, media_url, media_type, duration_seconds, background_color,
+                text_color, cta_text, cta_url, schedule_start, schedule_end, display_order: last, title: `${item.title} (copy)`, is_active: false,
+            }).select('id').single()
+            if (error || !data) throw new Error(error?.message || 'Could not duplicate the slide.')
+            setSelectedId(data.id)
+        }, 'A paused copy was added.')
     }
 
-    await loadContent()
-    setIsModalOpen(false)
-    setEditingItem(null)
-    success(editingItem ? 'Slide Updated' : 'Slide Added')
-  }
-
-  const handleDelete = async (item: AdContent) => {
-    if (!canManage) {
-      warning('Owner Required', 'Only the restaurant owner can delete advertisement content.')
-      return
+    function remove(item: AdContent) {
+        return mutate(async () => {
+            const response = await fetch(`/api/display/ad-content/${encodeURIComponent(item.id)}?restaurantId=${encodeURIComponent(restaurantId)}`, {
+                method: 'DELETE', headers: withStaffAuthHeaders(),
+            })
+            const data = await response.json().catch(() => null)
+            if (!response.ok || !data?.success) throw new Error(data?.error || 'Could not remove the slide.')
+        }, 'Slide removed.', () => { setDeleting(undefined); setPlaying(false) })
     }
 
-    setDeleteTarget(item)
-  }
-
-  const confirmDelete = async () => {
-    if (!deleteTarget) return
-    setIsDeleting(true)
-
-    try {
-      const res = await fetch(`/api/display/ad-content/${deleteTarget.id}?restaurantId=${restaurantId}`, {
-        method: 'DELETE',
-        headers: withStaffAuthHeaders(),
-      })
-      const data = await res.json()
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to delete advertisement content')
-      }
-
-      setContents(prev => prev.filter(item => item.id !== deleteTarget.id))
-      success('Advertisement Deleted', `"${deleteTarget.title}" was removed from the slideshow.`)
-      setDeleteTarget(null)
-    } catch (err: unknown) {
-      showError('Delete Failed', err instanceof Error ? err.message : 'Failed to delete advertisement content')
-    } finally {
-      setIsDeleting(false)
-    }
-  }
-
-  const handleDuplicate = async (item: AdContent) => {
-    if (!canManage) {
-      warning('Owner Required', 'Only the restaurant owner can duplicate advertisement content.')
-      return
+    function importLinks() {
+        const urls = bulkUrls.split('\n').map(value => value.trim()).filter(Boolean)
+        return mutate(async () => {
+            if (!urls.length || urls.length > 50 || urls.some(url => !httpsUrl(url))) throw new Error('Enter 1–50 HTTPS links, one on each line.')
+            const { error } = await db.from('ad_content').insert(urls.map((url, index) => ({
+                title: `Ad ${contents.length + index + 1}`, media_url: httpsUrl(url), restaurant_id: restaurantId, display_id: target,
+                duration_seconds: 8, display_order: last + index, is_active: true,
+                media_type: youtubeId(url) ? 'youtube' : /\.(mp4|webm|mov)(?:[?#]|$)/i.test(url) ? 'video' : 'image',
+            })))
+            if (error) throw new Error(error.message)
+        }, 'Links added to the playlist.', () => { setBulk(false); setBulkUrls('') })
     }
 
-    const { error } = await supabase.from('ad_content').insert({
-      restaurant_id: item.restaurant_id,
-      display_id: item.display_id,
-      title: `${item.title} (Copy)`,
-      description: item.description,
-      media_url: item.media_url,
-      media_type: item.media_type,
-      duration_seconds: item.duration_seconds,
-      display_order: item.display_order + 1,
-      background_color: item.background_color,
-      text_color: item.text_color,
-      cta_text: item.cta_text,
-      cta_url: item.cta_url,
-      is_active: item.is_active,
-    })
-    if (error) {
-      showError('Duplicate Failed', error.message)
-      return
-    }
-    await loadContent()
-    success('Slide Duplicated')
-  }
-
-  const handleToggleActive = async (item: AdContent) => {
-    if (!canManage) {
-      warning('Owner Required', 'Only the restaurant owner can change advertisement visibility.')
-      return
+    function openEditor(value: AdContent | 'new') {
+        setActionError('')
+        setEditor(value)
     }
 
-    const { error } = await supabase
-      .from('ad_content')
-      .update({ is_active: !item.is_active })
-      .eq('id', item.id)
-      .eq('restaurant_id', restaurantId)
-    if (error) {
-      showError('Update Failed', error.message)
-      return
-    }
-    await loadContent()
-  }
-
-  const handleMoveUp = async (index: number) => {
-    if (!canManage) {
-      warning('Owner Required', 'Only the restaurant owner can reorder advertisement content.')
-      return
-    }
-    if (index === 0) return
-    const newContents = [...contents]
-    const temp = newContents[index].display_order
-    newContents[index].display_order = newContents[index - 1].display_order
-    newContents[index - 1].display_order = temp
-    const first = await supabase.from('ad_content').update({ display_order: newContents[index].display_order }).eq('id', newContents[index].id).eq('restaurant_id', restaurantId)
-    const second = await supabase.from('ad_content').update({ display_order: newContents[index - 1].display_order }).eq('id', newContents[index - 1].id).eq('restaurant_id', restaurantId)
-    if (first.error || second.error) {
-      showError('Reorder Failed', first.error?.message || second.error?.message || 'Could not reorder slides')
-      return
-    }
-    await loadContent()
-  }
-
-  const handleMoveDown = async (index: number) => {
-    if (!canManage) {
-      warning('Owner Required', 'Only the restaurant owner can reorder advertisement content.')
-      return
-    }
-    if (index === contents.length - 1) return
-    const newContents = [...contents]
-    const temp = newContents[index].display_order
-    newContents[index].display_order = newContents[index + 1].display_order
-    newContents[index + 1].display_order = temp
-    const first = await supabase.from('ad_content').update({ display_order: newContents[index].display_order }).eq('id', newContents[index].id).eq('restaurant_id', restaurantId)
-    const second = await supabase.from('ad_content').update({ display_order: newContents[index + 1].display_order }).eq('id', newContents[index + 1].id).eq('restaurant_id', restaurantId)
-    if (first.error || second.error) {
-      showError('Reorder Failed', first.error?.message || second.error?.message || 'Could not reorder slides')
-      return
-    }
-    await loadContent()
-  }
-
-  const handleBulkImport = async () => {
-    if (!canManage) {
-      warning('Owner Required', 'Only the restaurant owner can import advertisement content.')
-      return
-    }
-
-    const urls = bulkUrls.split('\n').filter(url => url.trim())
-    const items = urls.map((url, index) => {
-      const trimmedUrl = url.trim()
-      let media_type: AdContentType = 'image'
-      if (trimmedUrl.includes('youtube.com') || trimmedUrl.includes('youtu.be')) {
-        media_type = 'youtube'
-      } else if (trimmedUrl.match(/\.(mp4|webm|mov)$/i)) {
-        media_type = 'video'
-      }
-      return {
-        restaurant_id: restaurantId,
-        display_id: displayId || null,
-        title: `Ad ${contents.length + index + 1}`,
-        media_url: trimmedUrl,
-        media_type,
-        duration_seconds: 8,
-        display_order: contents.length + index,
-        background_color: '#000000',
-        text_color: '#ffffff',
-        is_active: true,
-      }
-    })
-    const { error } = await supabase.from('ad_content').insert(items)
-    if (error) {
-      showError('Import Failed', error.message)
-      return
-    }
-    setBulkUrls('')
-    setIsBulkImport(false)
-    await loadContent()
-    success('Slides Imported', `${items.length} advertisement slide${items.length === 1 ? '' : 's'} added.`)
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-white">Advertisement Content</h2>
-          <p className="text-sm text-neutral-500">
-            {contents.length} slides
-            {!canManage && ' · view only'}
-          </p>
-        </div>
-        {canManage && (
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsBulkImport(true)}
-              className="px-4 py-2 rounded-xl font-bold bg-neutral-800 hover:bg-neutral-700 text-white transition-colors flex items-center gap-2"
-            >
-              <Upload className="w-4 h-4" />
-              Bulk Import
-            </button>
-            <button
-              onClick={() => { setEditingItem(null); setIsModalOpen(true) }}
-              className="px-4 py-2 rounded-xl font-bold bg-pink-600 hover:bg-pink-700 text-white transition-colors flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              Add Slide
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Content Grid */}
-      {isLoading ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map(i => (
-            <div key={i} className="aspect-video bg-neutral-900 rounded-xl animate-pulse" />
-          ))}
-        </div>
-      ) : contents.length === 0 ? (
-        <div className="text-center py-12 bg-neutral-900/50 rounded-xl border-2 border-dashed border-neutral-800">
-          <div className="w-16 h-16 bg-neutral-800 rounded-full flex items-center justify-center mx-auto mb-4">
-            <LucideImage className="w-8 h-8 text-neutral-600" />
-          </div>
-          <h3 className="text-lg font-bold text-white mb-2">No Content Yet</h3>
-          <p className="text-sm text-neutral-500 mb-4">Add images, videos, or YouTube links</p>
-          {canManage && (
-            <button
-              onClick={() => { setEditingItem(null); setIsModalOpen(true) }}
-              className="px-4 py-2 rounded-xl font-bold bg-pink-600 hover:bg-pink-700 text-white transition-colors"
-            >
-              Add Your First Slide
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {contents.map((item, index) => (
-            <motion.div
-              key={item.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className={cn(
-                "relative aspect-video bg-neutral-900 rounded-xl overflow-hidden border-2 transition-colors",
-                item.is_active ? 'border-neutral-700' : 'border-neutral-800 opacity-50'
-              )}
-            >
-              {/* Preview */}
-              {item.media_url && (
-                item.media_type === 'youtube' ? (
-                  <div className="w-full h-full bg-neutral-800 flex items-center justify-center">
-                    <Youtube className="w-8 h-8 text-red-500" />
-                  </div>
-                ) : item.media_type === 'video' ? (
-                  <div className="w-full h-full bg-neutral-800 flex items-center justify-center">
-                    <Video className="w-8 h-8 text-neutral-500" />
-                  </div>
-                ) : (
-                  <div className="relative w-full h-32 mb-2">
-                    <Image src={item.media_url} alt={item.title} fill className="object-cover rounded-lg" />
-                  </div>
-                )
-              )}
-
-              {/* Overlay */}
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent" />
-
-              {/* Content */}
-              <div className="absolute bottom-0 left-0 right-0 p-3">
-                <p className="font-bold text-white text-sm truncate">{item.title}</p>
-                <div className="flex items-center gap-2 mt-1">
-                  {item.media_type === 'image' && <LucideImage className="w-3 h-3 text-neutral-400" />}
-                  {item.media_type === 'video' && <Video className="w-3 h-3 text-neutral-400" />}
-                  {item.media_type === 'youtube' && <Youtube className="w-3 h-3 text-red-400" />}
-                  <span className="text-xs text-neutral-400">{item.duration_seconds}s</span>
+    return <div className={styles.stack}>
+        {error && <p className={styles.notice} role="alert">{error} <button className={work.secondary} onClick={() => void load()}>Refresh</button></p>}
+        {notice && <p className={styles.notice} role="status">{notice}</p>}
+        {!editor && !deleting && !bulk && actionError && <p className={styles.notice} role="alert">{actionError}</p>}
+        <div className={styles.board}>
+            <section className={`${work.panel} ${styles.stack}`} aria-label="Screen playlist">
+                <header className={work.panelHead}><div><h2>Screen playlist</h2><p>{loading ? 'Loading…' : `${queue.length} slides · ${screens.length} screens`}{!canManage && ' · View only'}</p></div></header>
+                <div className={styles.screenPicker}>
+                    <label className={work.field}>Screen
+                        <select value={scope} disabled={loading || busy} onChange={event => { setScope(event.target.value); setSelectedId(undefined); setPlaying(false) }}>
+                            <option value={library}>All media</option>
+                            {screens.map(item => <option key={item.id} value={item.id}>{item.name}{!item.is_active && ' (disabled)'}</option>)}
+                        </select>
+                    </label>
+                    <p className={styles.note}>{screen ? 'Includes slides shared with all ad screens.' : 'Choose a screen to see its playlist and shared slides.'}</p>
+                    {!loading && !error && screens.length === 0 && <p className={styles.note}>Create an Advertisement or Waiting Area screen in Manage screens to start playing media.</p>}
+                    {canManage && <div className={styles.actions}>
+                        <button className={work.primary} type="button" disabled={loading || busy || !!error} onClick={() => openEditor('new')}><Plus size={17} aria-hidden="true" /> Add media</button>
+                        <button className={work.secondary} type="button" disabled={loading || busy || !!error} onClick={() => { setActionError(''); setBulk(true) }}><Upload size={15} aria-hidden="true" /> Import links</button>
+                    </div>}
                 </div>
-              </div>
-
-              {/* Actions */}
-              {canManage && (
-                <>
-                  <div className="absolute top-2 right-2 flex items-center gap-1 rounded-lg bg-black/70 p-1 shadow-lg ring-1 ring-white/10">
-                    <button
-                      onClick={() => handleMoveUp(index)}
-                      disabled={index === 0}
-                      title="Move up"
-                      className="p-1.5 rounded-md text-white hover:bg-white/15 transition-colors disabled:opacity-30"
-                    >
-                      <ChevronUp className="w-3 h-3 text-white" />
-                    </button>
-                    <button
-                      onClick={() => handleMoveDown(index)}
-                      disabled={index === contents.length - 1}
-                      title="Move down"
-                      className="p-1.5 rounded-md text-white hover:bg-white/15 transition-colors disabled:opacity-30"
-                    >
-                      <ChevronDown className="w-3 h-3 text-white" />
-                    </button>
-                  </div>
-
-                  <div className="absolute top-2 left-2 flex items-center gap-1">
-                    <button
-                      onClick={() => handleToggleActive(item)}
-                      title={item.is_active ? 'Hide slide' : 'Show slide'}
-                      className="p-1.5 rounded-md bg-black/70 hover:bg-black/90 ring-1 ring-white/10 transition-colors"
-                    >
-                      {item.is_active ? (
-                        <Eye className="w-3 h-3 text-emerald-500" />
-                      ) : (
-                        <EyeOff className="w-3 h-3 text-neutral-500" />
-                      )}
-                    </button>
-                  </div>
-
-                  <div className="absolute bottom-2 right-2 flex items-center gap-1 rounded-lg bg-black/75 p-1 shadow-lg ring-1 ring-white/10">
-                    <button
-                      onClick={() => handleDuplicate(item)}
-                      title="Duplicate slide"
-                      className="p-1.5 rounded-md text-white hover:bg-white/15 transition-colors"
-                    >
-                      <Copy className="w-3 h-3 text-white" />
-                    </button>
-                    <button
-                      onClick={() => { setEditingItem(item); setIsModalOpen(true) }}
-                      title="Edit slide"
-                      className="p-1.5 rounded-md text-white hover:bg-white/15 transition-colors"
-                    >
-                      <Edit2 className="w-3 h-3 text-white" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(item)}
-                      title="Delete slide"
-                      aria-label={`Delete ${item.title}`}
-                      className="p-1.5 rounded-md bg-rose-600/90 text-white hover:bg-rose-500 transition-colors"
-                    >
-                      <Trash2 className="w-3 h-3 text-white" />
-                    </button>
-                  </div>
-                </>
-              )}
-            </motion.div>
-          ))}
-        </div>
-      )}
-
-      {/* Add/Edit Modal */}
-      <AnimatePresence>
-        {isModalOpen && (
-          <AdContentModal
-            item={editingItem}
-            onClose={() => { setIsModalOpen(false); setEditingItem(null) }}
-            onSave={handleSave}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Bulk Import Modal */}
-      <AnimatePresence>
-        {isBulkImport && (
-          <BulkImportModal
-            urls={bulkUrls}
-            onUrlsChange={setBulkUrls}
-            onClose={() => { setIsBulkImport(false); setBulkUrls('') }}
-            onImport={handleBulkImport}
-          />
-        )}
-      </AnimatePresence>
-
-      <ConfirmDialog
-        isOpen={!!deleteTarget}
-        title="Delete Advertisement"
-        message={`Delete "${deleteTarget?.title || 'this advertisement'}" from the slideshow? This cannot be undone.`}
-        confirmLabel={isDeleting ? 'Deleting...' : 'Delete'}
-        cancelLabel="Cancel"
-        variant="danger"
-        onConfirm={isDeleting ? () => {} : confirmDelete}
-        onCancel={() => {
-          if (!isDeleting) setDeleteTarget(null)
-        }}
-      />
-    </div>
-  )
-}
-
-// Add/Edit Modal
-function AdContentModal({
-  item,
-  onClose,
-  onSave,
-}: {
-  item: AdContent | null
-  onClose: () => void
-  onSave: (item: Partial<AdContent>) => void
-}) {
-  const [form, setForm] = useState({
-    title: item?.title || '',
-    description: item?.description || '',
-    media_url: item?.media_url || '',
-    media_type: item?.media_type || 'image' as AdContentType,
-    duration_seconds: item?.duration_seconds || 8,
-    background_color: item?.background_color || '#000000',
-    text_color: item?.text_color || '#ffffff',
-    cta_text: item?.cta_text || '',
-    cta_url: item?.cta_url || '',
-    is_active: item?.is_active ?? true,
-  })
-  const [isUploading, setIsUploading] = useState(false)
-  const [dragActive, setDragActive] = useState(false)
-  const [previewUrl, setPreviewUrl] = useState(item?.media_url || '')
-  const supabase = createClient()
-
-  const handleFileUpload = async (file: File) => {
-    setIsUploading(true)
-    try {
-      const fileExt = file.name.split('.').pop()
-      const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`
-      const filePath = `ad-content/${fileName}`
-
-      const { data, error } = await supabase.storage
-        .from('media')
-        .upload(filePath, file, {
-          cacheControl: '3600',
-          upsert: false
-        })
-
-      if (error) throw error
-
-      const { data: urlData } = supabase.storage
-        .from('media')
-        .getPublicUrl(filePath)
-
-      setForm(prev => ({ ...prev, media_url: urlData.publicUrl }))
-      setPreviewUrl(urlData.publicUrl)
-
-      // Auto-detect media type
-      if (file.type.startsWith('video/')) {
-        setForm(prev => ({ ...prev, media_type: 'video' }))
-      } else {
-        setForm(prev => ({ ...prev, media_type: 'image' }))
-      }
-    } catch (error) {
-      console.error('Upload failed:', error)
-      alert('Failed to upload file. Please try again.')
-    }
-    setIsUploading(false)
-  }
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragActive(false)
-    const file = e.dataTransfer.files[0]
-    if (file) handleFileUpload(file)
-  }
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) handleFileUpload(file)
-  }
-
-  const handleSave = () => {
-    onSave({
-      id: item?.id,
-      display_order: item?.display_order || 0,
-      ...form,
-    })
-  }
-
-  return (
-    <>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-        className="fixed inset-0 bg-black/80 backdrop-blur-xl z-50"
-      />
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-2xl"
-      >
-        <div className="bg-neutral-950 border border-neutral-800 rounded-3xl shadow-2xl">
-          <div className="flex items-center justify-between p-6 border-b border-neutral-800">
-            <h2 className="text-2xl font-black">{item ? 'Edit Slide' : 'Add New Slide'}</h2>
-            <button onClick={onClose} className="p-3 rounded-xl bg-neutral-900 hover:bg-neutral-800">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
-            {/* File Upload */}
-            <div>
-              <label className="block text-sm font-bold text-neutral-300 mb-2">Upload Image/Video</label>
-              <div
-                onDragOver={(e) => { e.preventDefault(); setDragActive(true) }}
-                onDragLeave={() => setDragActive(false)}
-                onDrop={handleDrop}
-                className={cn(
-                  "relative border-2 border-dashed rounded-xl p-8 text-center transition-colors",
-                  dragActive ? "border-pink-500 bg-pink-500/10" : "border-neutral-700 hover:border-neutral-600",
-                  isUploading && "opacity-50 pointer-events-none"
-                )}
-              >
-                <input
-                  type="file"
-                  accept="image/*,video/*"
-                  onChange={handleFileSelect}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                />
-                {isUploading ? (
-                  <div className="flex flex-col items-center">
-                    <div className="w-8 h-8 border-2 border-pink-500 border-t-transparent rounded-full animate-spin mb-2" />
-                    <p className="text-sm text-neutral-400">Uploading...</p>
-                  </div>
-                ) : previewUrl ? (
-                  <div className="flex flex-col items-center">
-                    {form.media_type === 'video' ? (
-                      <video src={previewUrl} className="h-32 object-cover rounded-lg mb-2" />
-                    ) : (
-                      <img src={previewUrl} alt="Preview" className="h-32 object-cover rounded-lg mb-2" />
-                    )}
-                    <p className="text-sm text-pink-400">Click or drag to replace</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center">
-                    <div className="w-12 h-12 bg-neutral-800 rounded-full flex items-center justify-center mb-3 mx-auto">
-                      <Upload className="w-6 h-6 text-neutral-500" />
+                {queue.length > 0 ? <ol className={styles.playlist}>
+                    {queue.map((item, index) => {
+                        const state = status(item, screens, now)
+                        const MediaIcon = item.media_type === 'video' || item.media_type === 'youtube' ? Film : ImageIcon
+                        const destination = item.display_id ? screens.find(screen => screen.id === item.display_id)?.name || 'Unavailable screen' : 'All ad screens'
+                        return <li key={item.id} className={styles.row} data-selected={selected?.id === item.id}>
+                            <button type="button" className={styles.rowMain} aria-pressed={selected?.id === item.id} onClick={() => { setSelectedId(item.id); setPlaying(false) }}>
+                                <span className={styles.index} aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
+                                <span className={styles.mediaMark} data-type={item.media_type}><MediaIcon size={18} aria-hidden="true" /></span>
+                                <span className={styles.rowCopy}><strong>{item.title}</strong><small>{formats[item.media_type]} · {item.duration_seconds}s · {destination}</small>
+                                    <span className={styles.badge} data-state={state}>{state}</span></span>
+                            </button>
+                            {canManage && <div className={styles.rowSide}><button className={work.secondary} type="button" disabled={busy || !!error} aria-label={`Edit ${item.title}`} onClick={() => openEditor(item)}>Edit</button></div>}
+                        </li>
+                    })}
+                </ol> : !loading && !error && <p className={`${work.panelBody} ${styles.note}`}>This playlist is empty. {canManage && 'Add an image, video, or media link.'}</p>}
+            </section>
+            <section className={styles.preview} aria-label="TV preview">
+                <div className={styles.stage}>
+                    <header className={styles.stageHead}><span>TV preview</span><small>{screen ? screen.name : '16:9 landscape'}</small></header>
+                    <div className={styles.frame}>
+                        {selected ? <SignageArtwork key={selected.id} slide={selected} playing={playing} loop /> : <div className={styles.frameEmpty}><Monitor size={29} aria-hidden="true" /><p>Choose or add media to preview it here.</p></div>}
                     </div>
-                    <p className="font-bold text-white mb-1">Drop image or video here</p>
-                    <p className="text-sm text-neutral-500">or click to browse</p>
-                    <p className="text-xs text-neutral-600 mt-2">JPG, PNG, GIF, MP4, WebM - Max 10MB</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* OR Divider */}
-            <div className="flex items-center gap-4">
-              <div className="flex-1 h-px bg-neutral-800" />
-              <span className="text-sm text-neutral-500">OR</span>
-              <div className="flex-1 h-px bg-neutral-800" />
-            </div>
-
-            {/* Media URL */}
-            <div>
-              <label className="block text-sm font-bold text-neutral-300 mb-2">Media URL</label>
-              <input
-                type="url"
-                value={form.media_url}
-                onChange={e => {
-                  setForm(prev => ({ ...prev, media_url: e.target.value }))
-                  setPreviewUrl(e.target.value)
-                }}
-                placeholder="https://example.com/image.jpg"
-                className="w-full px-4 py-3 rounded-xl bg-neutral-900 border border-neutral-800 text-white placeholder:text-neutral-600 outline-none focus:border-pink-500"
-              />
-            </div>
-
-            {/* Media Type */}
-            <div>
-              <label className="block text-sm font-bold text-neutral-300 mb-2">Media Type</label>
-              <div className="flex gap-2">
-                {(['image', 'video', 'youtube'] as const).map(type => (
-                  <button
-                    key={type}
-                    onClick={() => setForm(prev => ({ ...prev, media_type: type }))}
-                    className={cn(
-                      "flex-1 py-2 px-4 rounded-xl border-2 font-bold text-sm capitalize transition-colors",
-                      form.media_type === type
-                        ? "border-pink-500 bg-pink-500/10 text-pink-400"
-                        : "border-neutral-800 text-neutral-500 hover:border-neutral-700"
-                    )}
-                  >
-                    {type === 'youtube' ? 'YouTube' : type}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Title */}
-            <div>
-              <label className="block text-sm font-bold text-neutral-300 mb-2">Title</label>
-              <input
-                type="text"
-                value={form.title}
-                onChange={e => setForm(prev => ({ ...prev, title: e.target.value }))}
-                placeholder="Special Offer!"
-                className="w-full px-4 py-3 rounded-xl bg-neutral-900 border border-neutral-800 text-white placeholder:text-neutral-600 outline-none focus:border-pink-500"
-              />
-            </div>
-
-            {/* Description */}
-            <div>
-              <label className="block text-sm font-bold text-neutral-300 mb-2">Description</label>
-              <textarea
-                value={form.description}
-                onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
-                placeholder="50% off on all beverages today only!"
-                rows={2}
-                className="w-full px-4 py-3 rounded-xl bg-neutral-900 border border-neutral-800 text-white placeholder:text-neutral-600 outline-none focus:border-pink-500 resize-none"
-              />
-            </div>
-
-            {/* Duration */}
-            <div>
-              <label className="block text-sm font-bold text-neutral-300 mb-2">Duration (seconds)</label>
-              <input
-                type="number"
-                value={form.duration_seconds}
-                onChange={e => setForm(prev => ({ ...prev, duration_seconds: parseInt(e.target.value) || 8 }))}
-                min={1}
-                max={300}
-                className="w-full px-4 py-3 rounded-xl bg-neutral-900 border border-neutral-800 text-white outline-none focus:border-pink-500"
-              />
-            </div>
-
-            {/* Colors */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-bold text-neutral-300 mb-2">Background Color</label>
-                <input
-                  type="color"
-                  value={form.background_color}
-                  onChange={e => setForm(prev => ({ ...prev, background_color: e.target.value }))}
-                  className="w-full h-12 rounded-xl cursor-pointer"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-neutral-300 mb-2">Text Color</label>
-                <input
-                  type="color"
-                  value={form.text_color}
-                  onChange={e => setForm(prev => ({ ...prev, text_color: e.target.value }))}
-                  className="w-full h-12 rounded-xl cursor-pointer"
-                />
-              </div>
-            </div>
-
-            {/* CTA */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-bold text-neutral-300 mb-2">CTA Text</label>
-                <input
-                  type="text"
-                  value={form.cta_text}
-                  onChange={e => setForm(prev => ({ ...prev, cta_text: e.target.value }))}
-                  placeholder="Order Now"
-                  className="w-full px-4 py-3 rounded-xl bg-neutral-900 border border-neutral-800 text-white placeholder:text-neutral-600 outline-none focus:border-pink-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-neutral-300 mb-2">CTA URL</label>
-                <input
-                  type="url"
-                  value={form.cta_url}
-                  onChange={e => setForm(prev => ({ ...prev, cta_url: e.target.value }))}
-                  placeholder="https://..."
-                  className="w-full px-4 py-3 rounded-xl bg-neutral-900 border border-neutral-800 text-white placeholder:text-neutral-600 outline-none focus:border-pink-500"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-end gap-4 p-6 border-t border-neutral-800">
-            <button onClick={onClose} className="px-6 py-3 rounded-xl font-bold text-neutral-400 hover:text-white">
-              Cancel
-            </button>
-            <button onClick={handleSave} className="px-8 py-3 rounded-xl font-bold bg-pink-600 hover:bg-pink-700">
-              {item ? 'Save Changes' : 'Add Slide'}
-            </button>
-          </div>
+                    <div className={styles.stageFoot}>
+                        <p>{selected ? `${selected.title} · ${selected.duration_seconds}s` : 'Screen preview'}</p>
+                        <div className={styles.actions}>
+                            {mediaPreview && <button type="button" className={work.secondary} onClick={() => setPlaying(!playing)}><Play size={15} aria-hidden="true" /> {playing ? 'Pause preview' : 'Play preview'}</button>}
+                            {screen?.is_active && <Link className={work.secondary} href={`/display/${encodeURIComponent(screen.slug)}?preview=1`} target="_blank" rel="noopener noreferrer">Open TV player <ArrowUpRight size={16} aria-hidden="true" /></Link>}
+                        </div>
+                    </div>
+                </div>
+                {selected && canManage && <div className={`${work.panelBody} ${styles.actions}`}>
+                    <button type="button" className={work.secondary} disabled={busy || !!error} onClick={() => void mutate(() => update(selected.id, { is_active: !selected.is_active }), selected.is_active ? 'Slide paused.' : 'Slide enabled.')}>{selected.is_active ? 'Pause slide' : 'Enable slide'}</button>
+                    <button type="button" className={work.secondary} disabled={busy || !!error} onClick={() => duplicate(selected)}>Duplicate</button>
+                    {queue.length > 1 && <button type="button" className={work.secondary} disabled={busy || !!error || queue[0]?.id === selected.id} onClick={() => void mutate(() => update(selected.id, {
+                        display_order: Math.min(...contents.map(item => item.display_order)) - 1,
+                    }), 'Slide moved to the start.')}>Play first</button>}
+                    {queue.length > 1 && <button type="button" className={work.secondary} disabled={busy || !!error || queue.at(-1)?.id === selected.id} onClick={() => void mutate(() => update(selected.id, { display_order: last }), 'Slide moved to the end.')}>Play last</button>}
+                    <button type="button" className={work.secondary} disabled={busy || !!error} onClick={() => { setActionError(''); setDeleting(selected) }}>Remove</button>
+                </div>}
+            </section>
         </div>
-      </motion.div>
-    </>
-  )
+        {editor && <AdEditor item={editor === 'new' ? undefined : editor} screens={screens} target={target} busy={busy} error={actionError}
+            onClose={() => setEditor(undefined)} onSave={save} />}
+        {deleting && <ReviewDialog title="Remove this slide?" subtitle={deleting.title} busy={busy} onClose={() => setDeleting(undefined)}>
+            <div className={styles.stack}><p>This removes the slide from every playlist that includes it.</p>
+                {actionError && <p className={styles.notice} role="alert">{actionError}</p>}
+                <button type="button" className={work.primary} disabled={busy} onClick={() => void remove(deleting)}>{busy ? 'Removing…' : 'Remove slide'}</button>
+            </div>
+        </ReviewDialog>}
+        {bulk && <ReviewDialog title="Import media links" subtitle={screen?.name || 'All ad screens'} busy={busy} onClose={() => { setBulk(false); setBulkUrls('') }}>
+            <form className={styles.stack} onSubmit={event => { event.preventDefault(); void importLinks() }}>
+                <label className={work.field}>One HTTPS link per line<textarea value={bulkUrls} onChange={event => setBulkUrls(event.target.value)} rows={5} required disabled={busy} /></label>
+                {actionError && <p className={styles.notice} role="alert">{actionError}</p>}
+                <button className={work.primary} disabled={busy} type="submit"><Link2 size={16} aria-hidden="true" /> Import links</button>
+            </form>
+        </ReviewDialog>}
+    </div>
 }
 
-// Bulk Import Modal
-function BulkImportModal({
-  urls,
-  onUrlsChange,
-  onClose,
-  onImport,
-}: {
-  urls: string
-  onUrlsChange: (urls: string) => void
-  onClose: () => void
-  onImport: () => void
+function localTime(value?: string | null) {
+    const date = new Date(value || '')
+    return Number.isFinite(date.getTime()) ? new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : ''
+}
+
+function AdEditor({ item, screens, target, busy, error, onClose, onSave }: {
+    item?: AdContent; screens: Screen[]; target: string | null; busy: boolean; error: string;
+    onClose: () => void; onSave: (draft: AdDraft, upload?: () => Promise<string>) => Promise<void>
 }) {
-  return (
-    <>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-        className="fixed inset-0 bg-black/80 backdrop-blur-xl z-50"
-      />
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-2xl"
-      >
-        <div className="bg-neutral-950 border border-neutral-800 rounded-3xl shadow-2xl">
-          <div className="flex items-center justify-between p-6 border-b border-neutral-800">
-            <div>
-              <h2 className="text-2xl font-black">Bulk Import</h2>
-              <p className="text-sm text-neutral-500">Paste multiple image/video URLs (one per line)</p>
-            </div>
-            <button onClick={onClose} className="p-3 rounded-xl bg-neutral-900 hover:bg-neutral-800">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+    const [draft, setDraft] = useState<AdDraft>({
+        title: item?.title || '', description: item?.description || '', display_id: item ? item.display_id : target ?? '',
+        media_url: item?.media_url || '', media_type: item?.media_type || 'image', duration_seconds: item?.duration_seconds || 8,
+        background_color: item?.background_color || '#171a15', text_color: item?.text_color || '#ffffff',
+        cta_text: item?.cta_text || '', cta_url: item?.cta_url || '', is_active: item?.is_active ?? true,
+        schedule_start: localTime(item?.schedule_start), schedule_end: localTime(item?.schedule_end),
+    })
+    const [file, setFile] = useState<File>()
+    const fileInput = useRef<HTMLInputElement>(null)
+    const [issue, setIssue] = useState('')
+    const uploadCache = useRef<{ file: File; url: string } | null>(null)
+    const change = <Key extends keyof AdDraft>(key: Key, value: AdDraft[Key]) => setDraft(previous => ({ ...previous, [key]: value }))
 
-          <div className="p-6">
-            <textarea
-              value={urls}
-              onChange={e => onUrlsChange(e.target.value)}
-              placeholder={`https://example.com/image1.jpg\nhttps://example.com/image2.jpg\nhttps://youtube.com/watch?v=...`}
-              rows={10}
-              className="w-full px-4 py-3 rounded-xl bg-neutral-900 border border-neutral-800 text-white placeholder:text-neutral-600 outline-none focus:border-pink-500 font-mono text-sm resize-none"
-            />
-          </div>
+    function chooseFile(chosen?: File) {
+        if (!chosen) return
+        if (!/^(image|video)\//.test(chosen.type)) { setIssue('Choose an image or a video file.'); return }
+        setFile(chosen)
+        change('media_type', chosen.type.startsWith('video/') ? 'video' : 'image')
+        setIssue('')
+    }
 
-          <div className="flex items-center justify-end gap-4 p-6 border-t border-neutral-800">
-            <button onClick={onClose} className="px-6 py-3 rounded-xl font-bold text-neutral-400 hover:text-white">
-              Cancel
-            </button>
-            <button
-              onClick={onImport}
-              disabled={!urls.trim()}
-              className="px-8 py-3 rounded-xl font-bold bg-pink-600 hover:bg-pink-700 disabled:opacity-50"
-            >
-              Import {urls.split('\n').filter(u => u.trim()).length} Items
-            </button>
-          </div>
-        </div>
-      </motion.div>
-    </>
-  )
+    async function submit(event: FormEvent) {
+        event.preventDefault()
+        if (busy) return
+        setIssue('')
+        const media = httpsUrl(draft.media_url)
+        if (draft.display_id === '') { setIssue('Choose where this slide should play.'); return }
+        if (!draft.title.trim()) { setIssue('Give the slide a title.'); return }
+        if (draft.media_url && !media && !file) { setIssue('Use an HTTPS media link.'); return }
+        if (draft.media_type === 'youtube' && (!media || !youtubeId(media))) { setIssue('Enter a valid YouTube video link.'); return }
+        if (draft.cta_url && !httpsUrl(draft.cta_url)) { setIssue('Use an HTTPS link for the call to action.'); return }
+        const start = draft.schedule_start ? new Date(draft.schedule_start).toISOString() : null
+        const end = draft.schedule_end ? new Date(draft.schedule_end).toISOString() : null
+        if (start && end && end <= start) { setIssue('The end must be after the start.'); return }
+        await onSave({ ...draft, title: draft.title.trim(), media_url: media || null, cta_url: httpsUrl(draft.cta_url) || null,
+            description: draft.description?.trim() || null, cta_text: draft.cta_text?.trim() || null, schedule_start: start, schedule_end: end,
+        }, file ? async () => {
+            if (uploadCache.current?.file === file) return uploadCache.current.url
+            const ext = file.name.match(/\.([a-z0-9]{1,8})$/i)?.[1] || (file.type.startsWith('video/') ? 'mp4' : 'png')
+            const path = `ad-content/${crypto.randomUUID()}.${ext.toLowerCase()}`
+            const storage = createClient().storage.from('media')
+            const { error } = await storage.upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type })
+            if (error) throw new Error(`Upload failed. ${error.message}`)
+            const url = storage.getPublicUrl(path).data.publicUrl
+            uploadCache.current = { file, url }
+            return url
+        } : undefined)
+    }
+
+    return <ReviewDialog title={item ? 'Edit slide' : 'Add media'} subtitle="Choose the artwork, then where and when it should play." busy={busy} onClose={onClose}>
+        <form onSubmit={submit} className={styles.stack}>
+            <fieldset className={styles.stack} disabled={busy}>
+                <label className={work.field}>Slide title<input value={draft.title} onChange={event => change('title', event.target.value)} required maxLength={120} /></label>
+                <label className={styles.upload} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (!busy) chooseFile(event.dataTransfer.files[0]) }}>
+                    <strong>Upload an image or video</strong><small>Drag a file here or browse. Landscape 16:9 fills most TVs.</small>
+                    <input ref={fileInput} type="file" accept="image/*,video/*" onChange={event => chooseFile(event.target.files?.[0])} />
+                    {file && <small>Selected {file.name}</small>}
+                </label>
+                <div className={styles.editorRow}>
+                    <label className={work.field}>Media type<select value={draft.media_type} onChange={event => { setFile(undefined); if (fileInput.current) fileInput.current.value = ''; change('media_type', event.target.value as AdContentType) }}>
+                        {Object.entries(formats).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select></label>
+                    <label className={work.field}>Seconds on screen<input type="number" min={1} max={300} step={1} required value={draft.duration_seconds} onChange={event => change('duration_seconds', event.target.valueAsNumber || 0)} /></label>
+                </div>
+                <label className={work.field}>Media link <input type="url" value={draft.media_url || ''} disabled={!!file} placeholder="https://…" onChange={event => change('media_url', event.target.value)} /></label>
+                <label className={work.field}>Play on
+                    <select value={draft.display_id ?? 'all'} required onChange={event => change('display_id', event.target.value === 'all' ? null : event.target.value)}>
+                        <option value="" disabled>Choose a destination</option>
+                        <option value="all">All ad screens</option>
+                        {draft.display_id && !screens.some(screen => screen.id === draft.display_id) && <option value={draft.display_id}>Unavailable screen</option>}
+                        {screens.map(screen => <option key={screen.id} value={screen.id}>{screen.name}{!screen.is_active && ' (disabled)'}</option>)}
+                    </select>
+                </label>
+                <label className={styles.check}><input type="checkbox" checked={draft.is_active} onChange={event => change('is_active', event.target.checked)} /> Enable this slide</label>
+                <details className={styles.fieldset}><summary>Text, colors and schedule</summary>
+                    <div className={styles.stack}>
+                        <label className={work.field}>Description<textarea rows={2} value={draft.description || ''} maxLength={240} onChange={event => change('description', event.target.value)} /></label>
+                        <div className={styles.editorRow}>
+                            <label className={work.field}>Background color<input type="color" value={draft.background_color} onChange={event => change('background_color', event.target.value)} /></label>
+                            <label className={work.field}>Text color<input type="color" value={draft.text_color} onChange={event => change('text_color', event.target.value)} /></label>
+                            <label className={work.field}>Call to action text<input value={draft.cta_text || ''} maxLength={55} onChange={event => change('cta_text', event.target.value)} /></label>
+                            <label className={work.field}>Call to action link<input type="url" value={draft.cta_url || ''} onChange={event => change('cta_url', event.target.value)} /></label>
+                            <label className={work.field}>Starts (local time)<input type="datetime-local" value={draft.schedule_start || ''} onChange={event => change('schedule_start', event.target.value)} /></label>
+                            <label className={work.field}>Ends (local time)<input type="datetime-local" value={draft.schedule_end || ''} onChange={event => change('schedule_end', event.target.value)} /></label>
+                        </div>
+                    </div>
+                </details>
+            </fieldset>
+            {(issue || error) && <p className={styles.notice} role="alert">{issue || error}</p>}
+            <div className={styles.editorActions}><p className={styles.note}>Video plays muted by default.</p><button type="submit" className={work.primary} disabled={busy}>{busy ? 'Saving…' : 'Save slide'}</button></div>
+        </form>
+    </ReviewDialog>
 }

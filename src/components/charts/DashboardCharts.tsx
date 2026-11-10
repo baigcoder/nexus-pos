@@ -28,11 +28,21 @@ import type { OrderStatus } from '@/types/database'
 
 export function ChartSkeleton({ className = '' }: { className?: string }) {
     return (
-        <div className={cn('animate-pulse', className)}>
-            <div className="h-4 w-24 bg-[var(--surface-active)] rounded mb-4" />
-            <div className="h-64 bg-[var(--surface-active)]/50 rounded-xl" />
+        <div className={cn('animate-pulse space-y-4', className)}>
+            <div className="h-4 w-24 bg-[var(--surface-raised)] rounded" />
+            <div className="h-64 bg-[var(--surface-raised)] rounded-xl border border-[var(--border)]" />
         </div>
     )
+}
+
+const customTooltipStyle = {
+    backgroundColor: 'var(--surface-raised)',
+    border: '1px solid var(--border-strong)',
+    borderRadius: '14px',
+    color: 'var(--text-primary)',
+    fontSize: '11px',
+    fontWeight: '600',
+    boxShadow: '0 12px 40px rgba(0, 0, 0, 0.4)',
 }
 
 // ============================================
@@ -62,7 +72,7 @@ export function RevenueChart({ data, loading, error, onRefresh }: RevenueChartPr
 
     if (loading) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
                 <ChartSkeleton />
             </div>
         )
@@ -70,12 +80,12 @@ export function RevenueChart({ data, loading, error, onRefresh }: RevenueChartPr
 
     if (error) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
                 <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-bold text-[var(--text-primary)]">Revenue Trend</h3>
+                    <h3 className="text-lg font-bold text-[var(--text-primary)] font-display">Revenue Trend</h3>
                 </div>
-                <div className="h-64 flex items-center justify-center text-red-400 text-sm">
-                    {error} <button onClick={onRefresh} className="ml-2 text-brand hover:underline">Retry</button>
+                <div className="h-64 flex items-center justify-center text-red-400 text-xs font-semibold">
+                    {error} <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="ml-2 text-brand hover:underline cursor-pointer">Retry</button>
                 </div>
             </div>
         )
@@ -83,16 +93,16 @@ export function RevenueChart({ data, loading, error, onRefresh }: RevenueChartPr
 
     if (!data || data.length === 0) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
                 <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-bold text-[var(--text-primary)]">Revenue Trend</h3>
+                    <h3 className="text-lg font-bold text-[var(--text-primary)] font-display">Revenue Trend</h3>
                     {onRefresh && (
-                        <button onClick={onRefresh} className="p-2 hover:bg-[var(--surface-active)] rounded-lg transition-colors">
-                            <RefreshCw className="w-4 h-4 text-[var(--text-muted)]" />
+                        <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="p-2 hover:bg-[var(--surface-hover)] rounded-lg transition-colors cursor-pointer">
+                            <RefreshCw className="w-4 h-4 text-[var(--text-secondary)]" />
                         </button>
                     )}
                 </div>
-                <div className="h-64 flex items-center justify-center text-[var(--text-muted)] text-sm">
+                <div className="h-64 flex items-center justify-center text-[var(--text-secondary)] text-xs font-semibold">
                     No revenue data available
                 </div>
             </div>
@@ -100,51 +110,51 @@ export function RevenueChart({ data, loading, error, onRefresh }: RevenueChartPr
     }
 
     return (
-        <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-[var(--text-primary)]">Revenue Trend</h3>
+        <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5 relative overflow-hidden group">
+            <div className="flex items-center justify-between mb-6">
+                <div>
+                    <h3 className="text-lg font-bold text-[var(--text-primary)] font-display">Revenue Trend</h3>
+                    <p className="text-xs text-[var(--text-secondary)] mt-0.5">Daily gross checkout sales</p>
+                </div>
                 {onRefresh && (
-                    <button onClick={onRefresh} className="p-2 hover:bg-[var(--surface-active)] rounded-lg transition-colors">
-                        <RefreshCw className="w-4 h-4 text-[var(--text-muted)]" />
+                    <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="p-2 hover:bg-[var(--surface-hover)] border border-[var(--border)] hover:border-[var(--border-strong)] rounded-xl transition-all cursor-pointer">
+                        <RefreshCw className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
                     </button>
                 )}
             </div>
             <ResponsiveContainer width="100%" height={280}>
-                <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <defs>
                         <linearGradient id="revenueGradient" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#f97316" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
+                            <stop offset="5%" stopColor="var(--brand)" stopOpacity={0.25} />
+                            <stop offset="95%" stopColor="var(--brand)" stopOpacity={0} />
                         </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                     <XAxis
                         dataKey="date"
                         tickFormatter={formatDate}
-                        stroke="#71717a"
-                        tick={{ fill: '#71717a', fontSize: 12 }}
-                        axisLine={{ stroke: '#27272a' }}
+                        stroke="var(--text-secondary)"
+                        tick={{ fill: 'var(--text-secondary)', fontSize: 10, fontWeight: 'bold' }}
+                        axisLine={false}
+                        tickLine={false}
                     />
                     <YAxis
                         tickFormatter={formatCurrency}
-                        stroke="#71717a"
-                        tick={{ fill: '#71717a', fontSize: 12 }}
-                        axisLine={{ stroke: '#27272a' }}
+                        stroke="var(--text-secondary)"
+                        tick={{ fill: 'var(--text-secondary)', fontSize: 10, fontWeight: 'bold' }}
+                        axisLine={false}
+                        tickLine={false}
                     />
                     <Tooltip
-                        contentStyle={{
-                            backgroundColor: '#141414',
-                            border: '1px solid #262626',
-                            borderRadius: '8px',
-                            color: '#fafafa'
-                        }}
+                        contentStyle={customTooltipStyle}
                         labelFormatter={(label: any) => formatDate(label)}
-                        formatter={(value: any) => [formatCurrency(Number(value)), 'Revenue']}
+                        formatter={(value: any) => [formatCurrency(Number(value)), 'Gross Revenue']}
                     />
                     <Area
                         type="monotone"
                         dataKey="revenue"
-                        stroke="#f97316"
+                        stroke="var(--brand)"
                         strokeWidth={2}
                         fill="url(#revenueGradient)"
                     />
@@ -159,11 +169,11 @@ export function RevenueChart({ data, loading, error, onRefresh }: RevenueChartPr
 // ============================================
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
-    pending: '#fbbf24',    // Yellow
+    pending: '#f59e0b',    // Orange/Yellow
     preparing: '#3b82f6',  // Blue
     ready: '#a855f7',      // Purple
-    served: '#8b5cf6',     // Violet
-    paid: '#10b981',        // Emerald
+    served: '#6366f1',     // Indigo
+    paid: '#10b981',       // Emerald
     cancelled: '#ef4444'   // Red
 }
 
@@ -186,7 +196,7 @@ interface OrdersStatusChartProps {
 export function OrdersStatusChart({ data, loading, error, onRefresh }: OrdersStatusChartProps) {
     if (loading) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
                 <ChartSkeleton />
             </div>
         )
@@ -194,10 +204,10 @@ export function OrdersStatusChart({ data, loading, error, onRefresh }: OrdersSta
 
     if (error) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
-                <h3 className="text-lg font-bold text-[var(--text-primary)] mb-4">Orders by Status</h3>
-                <div className="h-48 flex items-center justify-center text-red-400 text-sm">
-                    {error} <button onClick={onRefresh} className="ml-2 text-brand hover:underline">Retry</button>
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
+                <h3 className="text-lg font-bold text-[var(--text-primary)] font-display mb-4">Orders by Status</h3>
+                <div className="h-48 flex items-center justify-center text-red-400 text-xs font-semibold">
+                    {error} <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="ml-2 text-brand hover:underline cursor-pointer">Retry</button>
                 </div>
             </div>
         )
@@ -205,16 +215,16 @@ export function OrdersStatusChart({ data, loading, error, onRefresh }: OrdersSta
 
     if (!data || data.length === 0) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
                 <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-bold text-[var(--text-primary)]">Orders by Status</h3>
+                    <h3 className="text-lg font-bold text-[var(--text-primary)] font-display">Orders by Status</h3>
                     {onRefresh && (
-                        <button onClick={onRefresh} className="p-2 hover:bg-[var(--surface-active)] rounded-lg transition-colors">
-                            <RefreshCw className="w-4 h-4 text-[var(--text-muted)]" />
+                        <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="p-2 hover:bg-[var(--surface-hover)] rounded-lg transition-colors cursor-pointer">
+                            <RefreshCw className="w-4 h-4 text-[var(--text-secondary)]" />
                         </button>
                     )}
                 </div>
-                <div className="h-48 flex items-center justify-center text-[var(--text-muted)] text-sm">
+                <div className="h-48 flex items-center justify-center text-[var(--text-secondary)] text-xs font-semibold">
                     No order status data available
                 </div>
             </div>
@@ -222,17 +232,20 @@ export function OrdersStatusChart({ data, loading, error, onRefresh }: OrdersSta
     }
 
     return (
-        <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-[var(--text-primary)]">Orders by Status</h3>
+        <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-6">
+                <div>
+                    <h3 className="text-lg font-bold text-[var(--text-primary)] font-display">Orders by Status</h3>
+                    <p className="text-xs text-[var(--text-secondary)] mt-0.5">Real-time status breakdowns</p>
+                </div>
                 {onRefresh && (
-                    <button onClick={onRefresh} className="p-2 hover:bg-[var(--surface-active)] rounded-lg transition-colors">
-                        <RefreshCw className="w-4 h-4 text-[var(--text-muted)]" />
+                    <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="p-2 hover:bg-[var(--surface-hover)] border border-[var(--border)] hover:border-[var(--border-strong)] rounded-xl transition-all cursor-pointer">
+                        <RefreshCw className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
                     </button>
                 )}
             </div>
-            <div className="flex items-center justify-between">
-                <ResponsiveContainer width="50%" height={200}>
+            <div className="flex items-center justify-between flex-wrap gap-4 sm:flex-nowrap">
+                <ResponsiveContainer width="45%" height={180}>
                     <PieChart>
                         <Pie
                             data={data}
@@ -240,42 +253,39 @@ export function OrdersStatusChart({ data, loading, error, onRefresh }: OrdersSta
                             nameKey="status"
                             cx="50%"
                             cy="50%"
-                            innerRadius={50}
-                            outerRadius={80}
-                            paddingAngle={2}
+                            innerRadius={45}
+                            outerRadius={70}
+                            paddingAngle={3}
                         >
                             {data.map((entry, index) => (
                                 <Cell
                                     key={`cell-${index}`}
                                     fill={STATUS_COLORS[entry.status] || '#71717a'}
+                                    stroke="var(--surface)"
+                                    strokeWidth={1}
                                 />
                             ))}
                         </Pie>
                         <Tooltip
-                            contentStyle={{
-                                backgroundColor: '#141414',
-                                border: '1px solid #262626',
-                                borderRadius: '8px',
-                                color: '#fafafa'
-                            }}
+                            contentStyle={customTooltipStyle}
                             formatter={(value: any, name: any) => [
-                                value,
+                                `${value} Orders`,
                                 STATUS_LABELS[name as OrderStatus] || name
                             ]}
                         />
                     </PieChart>
                 </ResponsiveContainer>
-                <div className="flex-1 pl-4 space-y-2">
+                <div className="flex-1 pl-4 space-y-2.5">
                     {data.map((item) => (
-                        <div key={item.status} className="flex items-center justify-between text-sm">
+                        <div key={item.status} className="flex items-center justify-between text-xs font-bold">
                             <div className="flex items-center gap-2">
                                 <div
-                                    className="w-3 h-3 rounded-full"
-                                    style={{ backgroundColor: STATUS_COLORS[item.status] }}
+                                    className="w-2.5 h-2.5 rounded-full shadow-glow"
+                                    style={{ backgroundColor: STATUS_COLORS[item.status], boxShadow: `0 0 10px ${STATUS_COLORS[item.status]}40` }}
                                 />
-                                <span className="text-[var(--text-muted)]">{STATUS_LABELS[item.status]}</span>
+                                <span className="text-[var(--text-secondary)]">{STATUS_LABELS[item.status]}</span>
                             </div>
-                            <span className="text-[var(--text-primary)] font-semibold">{item.count}</span>
+                            <span className="text-[var(--text-primary)]">{item.count}</span>
                         </div>
                     ))}
                 </div>
@@ -304,7 +314,7 @@ export function HourlyOrdersChart({ data, loading, error, onRefresh }: HourlyOrd
 
     if (loading) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
                 <ChartSkeleton />
             </div>
         )
@@ -312,10 +322,10 @@ export function HourlyOrdersChart({ data, loading, error, onRefresh }: HourlyOrd
 
     if (error) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
-                <h3 className="text-lg font-bold text-[var(--text-primary)] mb-4">Orders by Hour</h3>
-                <div className="h-48 flex items-center justify-center text-red-400 text-sm">
-                    {error} <button onClick={onRefresh} className="ml-2 text-brand hover:underline">Retry</button>
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
+                <h3 className="text-lg font-bold text-[var(--text-primary)] font-display mb-4">Orders by Hour</h3>
+                <div className="h-48 flex items-center justify-center text-red-400 text-xs font-semibold">
+                    {error} <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="ml-2 text-brand hover:underline cursor-pointer">Retry</button>
                 </div>
             </div>
         )
@@ -323,16 +333,16 @@ export function HourlyOrdersChart({ data, loading, error, onRefresh }: HourlyOrd
 
     if (!data || data.length === 0) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
                 <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-bold text-[var(--text-primary)]">Orders by Hour</h3>
+                    <h3 className="text-lg font-bold text-[var(--text-primary)] font-display">Orders by Hour</h3>
                     {onRefresh && (
-                        <button onClick={onRefresh} className="p-2 hover:bg-[var(--surface-active)] rounded-lg transition-colors">
-                            <RefreshCw className="w-4 h-4 text-[var(--text-muted)]" />
+                        <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="p-2 hover:bg-[var(--surface-hover)] rounded-lg transition-colors cursor-pointer">
+                            <RefreshCw className="w-4 h-4 text-[var(--text-secondary)]" />
                         </button>
                     )}
                 </div>
-                <div className="h-48 flex items-center justify-center text-[var(--text-muted)] text-sm">
+                <div className="h-48 flex items-center justify-center text-[var(--text-secondary)] text-xs font-semibold">
                     No hourly data available
                 </div>
             </div>
@@ -340,44 +350,44 @@ export function HourlyOrdersChart({ data, loading, error, onRefresh }: HourlyOrd
     }
 
     return (
-        <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-[var(--text-primary)]">Orders by Hour</h3>
+        <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-6">
+                <div>
+                    <h3 className="text-lg font-bold text-[var(--text-primary)] font-display">Orders by Hour</h3>
+                    <p className="text-xs text-[var(--text-secondary)] mt-0.5">Peak hour load distribution</p>
+                </div>
                 {onRefresh && (
-                    <button onClick={onRefresh} className="p-2 hover:bg-[var(--surface-active)] rounded-lg transition-colors">
-                        <RefreshCw className="w-4 h-4 text-[var(--text-muted)]" />
+                    <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="p-2 hover:bg-[var(--surface-hover)] border border-[var(--border)] hover:border-[var(--border-strong)] rounded-xl transition-all cursor-pointer">
+                        <RefreshCw className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
                     </button>
                 )}
             </div>
             <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1f1f1f" />
+                <BarChart data={data} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                     <XAxis
                         dataKey="hour"
                         tickFormatter={formatHour}
-                        stroke="#71717a"
-                        tick={{ fill: '#71717a', fontSize: 11 }}
-                        axisLine={{ stroke: '#27272a' }}
+                        stroke="var(--text-secondary)"
+                        tick={{ fill: 'var(--text-secondary)', fontSize: 10, fontWeight: 'bold' }}
+                        axisLine={false}
+                        tickLine={false}
                     />
                     <YAxis
-                        stroke="#71717a"
-                        tick={{ fill: '#71717a', fontSize: 12 }}
-                        axisLine={{ stroke: '#27272a' }}
+                        stroke="var(--text-secondary)"
+                        tick={{ fill: 'var(--text-secondary)', fontSize: 10, fontWeight: 'bold' }}
+                        axisLine={false}
+                        tickLine={false}
                     />
                     <Tooltip
-                        contentStyle={{
-                            backgroundColor: '#141414',
-                            border: '1px solid #262626',
-                            borderRadius: '8px',
-                            color: '#fafafa'
-                        }}
+                        contentStyle={customTooltipStyle}
                         labelFormatter={(label: any) => formatHour(label)}
-                        formatter={(value: any) => [value, 'Orders']}
+                        formatter={(value: any) => [value, 'Orders Filled']}
                     />
                     <Bar
                         dataKey="orders"
-                        fill="#f97316"
-                        radius={[4, 4, 0, 0]}
+                        fill="var(--brand)"
+                        radius={[5, 5, 0, 0]}
                         opacity={0.8}
                     />
                 </BarChart>
@@ -409,7 +419,7 @@ export function CategoryChart({ data, loading, error, onRefresh }: CategoryChart
 
     if (loading) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
                 <ChartSkeleton />
             </div>
         )
@@ -417,10 +427,10 @@ export function CategoryChart({ data, loading, error, onRefresh }: CategoryChart
 
     if (error) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
-                <h3 className="text-lg font-bold text-[var(--text-primary)] mb-4">Top Categories</h3>
-                <div className="h-48 flex items-center justify-center text-red-400 text-sm">
-                    {error} <button onClick={onRefresh} className="ml-2 text-brand hover:underline">Retry</button>
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
+                <h3 className="text-lg font-bold text-[var(--text-primary)] font-display mb-4">Top Categories</h3>
+                <div className="h-48 flex items-center justify-center text-red-400 text-xs font-semibold">
+                    {error} <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="ml-2 text-brand hover:underline cursor-pointer">Retry</button>
                 </div>
             </div>
         )
@@ -428,16 +438,16 @@ export function CategoryChart({ data, loading, error, onRefresh }: CategoryChart
 
     if (!data || data.length === 0) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
+            <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
                 <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-bold text-[var(--text-primary)]">Top Categories</h3>
+                    <h3 className="text-lg font-bold text-[var(--text-primary)] font-display">Top Categories</h3>
                     {onRefresh && (
-                        <button onClick={onRefresh} className="p-2 hover:bg-[var(--surface-active)] rounded-lg transition-colors">
-                            <RefreshCw className="w-4 h-4 text-[var(--text-muted)]" />
+                        <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="p-2 hover:bg-[var(--surface-hover)] rounded-lg transition-colors cursor-pointer">
+                            <RefreshCw className="w-4 h-4 text-[var(--text-secondary)]" />
                         </button>
                     )}
                 </div>
-                <div className="h-48 flex items-center justify-center text-[var(--text-muted)] text-sm">
+                <div className="h-48 flex items-center justify-center text-[var(--text-secondary)] text-xs font-semibold">
                     No category data available
                 </div>
             </div>
@@ -447,12 +457,15 @@ export function CategoryChart({ data, loading, error, onRefresh }: CategoryChart
     const topCategories = data.slice(0, 6)
 
     return (
-        <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-[var(--text-primary)]">Top Categories</h3>
+        <div className="min-w-0 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-6">
+                <div>
+                    <h3 className="text-lg font-bold text-[var(--text-primary)] font-display">Top Categories</h3>
+                    <p className="text-xs text-[var(--text-secondary)] mt-0.5">Sales contribution by menu branch</p>
+                </div>
                 {onRefresh && (
-                    <button onClick={onRefresh} className="p-2 hover:bg-[var(--surface-active)] rounded-lg transition-colors">
-                        <RefreshCw className="w-4 h-4 text-[var(--text-muted)]" />
+                    <button type="button" aria-label="Refresh chart" onClick={onRefresh} className="p-2 hover:bg-[var(--surface-hover)] border border-[var(--border)] hover:border-[var(--border-strong)] rounded-xl transition-all cursor-pointer">
+                        <RefreshCw className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
                     </button>
                 )}
             </div>
@@ -463,16 +476,16 @@ export function CategoryChart({ data, loading, error, onRefresh }: CategoryChart
 
                     return (
                         <div key={item.category} className="space-y-2">
-                            <div className="flex items-center justify-between text-sm">
-                                <span className="text-[var(--text-muted)] font-medium">{item.category}</span>
-                                <span className="text-[var(--text-primary)] font-semibold">{formatCurrency(item.revenue)}</span>
+                            <div className="flex items-center justify-between text-xs font-bold">
+                                <span className="text-[var(--text-secondary)] font-display">{item.category}</span>
+                                <span className="text-[var(--text-primary)]">{formatCurrency(item.revenue)}</span>
                             </div>
-                            <div className="h-2 bg-[var(--surface-active)] rounded-full overflow-hidden">
+                            <div className="h-2 bg-[var(--surface-raised)] rounded-full overflow-hidden border border-[var(--border)]">
                                 <motion.div
                                     initial={{ width: 0 }}
                                     animate={{ width: `${percentage}%` }}
-                                    transition={{ delay: index * 0.1, duration: 0.5 }}
-                                    className="h-full bg-gradient-to-r from-brand to-brand-hover rounded-full"
+                                    transition={{ delay: index * 0.08, duration: 0.5 }}
+                                    className="h-full bg-gradient-to-r from-brand to-purple-500 rounded-full"
                                 />
                             </div>
                         </div>
@@ -521,7 +534,7 @@ const getStatusConfig = (status: OrderStatus) => {
         pending: { color: 'text-yellow-400', bg: 'bg-yellow-500/10', label: 'Pending' },
         preparing: { color: 'text-blue-400', bg: 'bg-blue-500/10', label: 'Preparing' },
         ready: { color: 'text-purple-400', bg: 'bg-purple-500/10', label: 'Ready' },
-        served: { color: 'text-violet-400', bg: 'bg-violet-500/10', label: 'Served' },
+        served: { color: 'text-indigo-400', bg: 'bg-indigo-500/10', label: 'Served' },
         paid: { color: 'text-emerald-400', bg: 'bg-emerald-500/10', label: 'Paid' },
         cancelled: { color: 'text-red-400', bg: 'bg-red-500/10', label: 'Cancelled' }
     }
@@ -531,14 +544,14 @@ const getStatusConfig = (status: OrderStatus) => {
 export function RecentActivity({ orders, loading, error, onRefresh }: RecentActivityProps) {
     if (loading) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
+            <div className="bg-slate-950/60 border border-white/5 rounded-2xl p-6 backdrop-blur-md">
                 <div className="space-y-4">
                     {[...Array(5)].map((_, i) => (
                         <div key={i} className="animate-pulse flex items-center gap-4">
-                            <div className="w-12 h-12 bg-[var(--surface-active)] rounded-xl" />
-                            <div className="flex-1">
-                                <div className="h-4 bg-[var(--surface-active)] rounded w-3/4 mb-2" />
-                                <div className="h-3 bg-[var(--surface-active)] rounded w-1/2" />
+                            <div className="w-11 h-11 bg-white/5 rounded-xl border border-white/5" />
+                            <div className="flex-1 space-y-2">
+                                <div className="h-3.5 bg-white/5 rounded w-3/4" />
+                                <div className="h-2.5 bg-white/5 rounded w-1/2" />
                             </div>
                         </div>
                     ))}
@@ -549,10 +562,10 @@ export function RecentActivity({ orders, loading, error, onRefresh }: RecentActi
 
     if (error) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
-                <h2 className="text-lg font-bold text-[var(--text-primary)] mb-4">Recent Activity</h2>
-                <div className="h-48 flex items-center justify-center text-red-400 text-sm">
-                    {error} <button onClick={onRefresh} className="ml-2 text-brand hover:underline">Retry</button>
+            <div className="bg-slate-950/60 border border-white/5 rounded-2xl p-6 backdrop-blur-md">
+                <h2 className="text-sm font-bold text-white uppercase tracking-wider font-display mb-4">Recent Activity</h2>
+                <div className="h-48 flex items-center justify-center text-red-400 text-xs font-semibold">
+                    {error} <button onClick={onRefresh} className="ml-2 text-brand hover:underline cursor-pointer">Retry</button>
                 </div>
             </div>
         )
@@ -560,16 +573,16 @@ export function RecentActivity({ orders, loading, error, onRefresh }: RecentActi
 
     if (!orders || orders.length === 0) {
         return (
-            <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
+            <div className="bg-slate-950/60 border border-white/5 rounded-2xl p-6 backdrop-blur-md">
                 <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-lg font-bold text-[var(--text-primary)]">Recent Activity</h2>
+                    <h2 className="text-sm font-bold text-white uppercase tracking-wider font-display">Recent Activity</h2>
                     {onRefresh && (
-                        <button onClick={onRefresh} className="p-2 hover:bg-[var(--surface-active)] rounded-lg transition-colors">
-                            <RefreshCw className="w-4 h-4 text-[var(--text-muted)]" />
+                        <button onClick={onRefresh} className="p-2 hover:bg-white/5 rounded-lg transition-colors cursor-pointer">
+                            <RefreshCw className="w-4 h-4 text-slate-400" />
                         </button>
                     )}
                 </div>
-                <div className="h-48 flex items-center justify-center text-[var(--text-muted)] text-sm">
+                <div className="h-48 flex items-center justify-center text-slate-500 text-xs font-semibold">
                     No recent orders
                 </div>
             </div>
@@ -577,16 +590,19 @@ export function RecentActivity({ orders, loading, error, onRefresh }: RecentActi
     }
 
     return (
-        <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-bold text-[var(--text-primary)]">Recent Activity</h2>
+        <div className="bg-slate-950/60 border border-white/5 rounded-2xl p-6 backdrop-blur-md shadow-premium">
+            <div className="flex items-center justify-between mb-6">
+                <div>
+                    <h2 className="text-sm font-bold text-white uppercase tracking-widest font-display">Recent Activity</h2>
+                    <p className="text-[10px] text-slate-400 font-semibold mt-0.5">Kitchen streams and cashier outputs</p>
+                </div>
                 {onRefresh && (
-                    <button onClick={onRefresh} className="p-2 hover:bg-[var(--surface-active)] rounded-lg transition-colors">
-                        <RefreshCw className="w-4 h-4 text-[var(--text-muted)]" />
+                    <button onClick={onRefresh} className="p-2 hover:bg-white/5 border border-white/5 hover:border-white/10 rounded-xl transition-all cursor-pointer">
+                        <RefreshCw className="w-3.5 h-3.5 text-slate-400" />
                     </button>
                 )}
             </div>
-            <div className="space-y-4">
+            <div className="space-y-3.5">
                 {orders.slice(0, 8).map((order, index) => {
                     const statusConfig = getStatusConfig(order.status)
                     const formatCurrency = (value: number) => {
@@ -601,30 +617,30 @@ export function RecentActivity({ orders, loading, error, onRefresh }: RecentActi
                     return (
                         <motion.div
                             key={order.id}
-                            initial={{ opacity: 0, x: -20 }}
+                            initial={{ opacity: 0, x: -10 }}
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: index * 0.05 }}
-                            className="flex items-center justify-between py-3 border-b border-[var(--border)]/50 last:border-0"
+                            className="flex items-center justify-between py-3 border-b border-white/5 last:border-0"
                         >
                             <div className="flex items-center gap-4">
-                                <div className="w-12 h-12 bg-orange-500/10 rounded-xl flex items-center justify-center">
-                                    <span className="text-brand font-bold">#{order.order_number}</span>
+                                <div className="w-10 h-10 bg-brand/5 border border-brand/20 rounded-xl flex items-center justify-center shadow-glow">
+                                    <span className="text-brand font-black text-xs">#{order.order_number}</span>
                                 </div>
-                                <div>
+                                <div className="space-y-0.5">
                                     <div className="flex items-center gap-2">
-                                        <p className="text-sm font-semibold text-[var(--text-primary)]">
+                                        <p className="text-xs font-bold text-white leading-none">
                                             Order #{order.order_number}
                                         </p>
-                                        <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', statusConfig.bg, statusConfig.color)}>
+                                        <span className={cn('text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider border', statusConfig.bg, statusConfig.color, `border-${statusConfig.color.split('-')[1]}-500/20`)}>
                                             {statusConfig.label}
                                         </span>
                                     </div>
-                                    <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                                        {order.table_number ? `Table ${order.table_number}` : 'Takeaway'} - {formatCurrency(order.total)}
+                                    <p className="text-[10px] text-slate-400 font-semibold">
+                                        {order.table_number ? `Table ${order.table_number}` : 'Takeaway'} • {formatCurrency(order.total)}
                                     </p>
                                 </div>
                             </div>
-                            <span className="text-xs text-[var(--text-muted)] font-medium">{getTimeAgo(order.created_at)}</span>
+                            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">{getTimeAgo(order.created_at)}</span>
                         </motion.div>
                     )
                 })}

@@ -1,516 +1,204 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { getAuthenticatedStaff, tenantMismatchResponse } from '@/lib/api-auth'
+import { OrderService } from '@/lib/services/order-service'
 
-// Delivery Order Flow System
-// Handles: Website Order / Phone Call -> Kitchen -> Delivery Rider -> Customer
+const managers = ['owner', 'manager']
+const riders = ['rider', 'delivery']
+const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
+const privateHeaders = { 'Cache-Control': 'private, no-store' }
 
-export async function POST(request: NextRequest) {
-    try {
-        const supabase = await createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+function responseStatus(code?: string) {
+    if (code === 'forbidden') return 403
+    if (code === 'not_found') return 404
+    if (code === 'conflict') return 409
+    if (code === 'internal') return 500
+    return 400
+}
 
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const { restaurant_id, action, data: actionData } = await request.json()
-
-        // Get staff info
-        const { data: staffData } = await supabase
-            .from('staff')
-            .select('id, restaurant_id, role, name')
-            .eq('user_id', user.id)
-            .single()
-
-        const targetRestaurantId = restaurant_id || staffData?.restaurant_id
-        if (!targetRestaurantId) {
-            return NextResponse.json({ error: 'No restaurant' }, { status: 404 })
-        }
-
-        // ============== CREATE DELIVERY ORDER ==============
-        if (action === 'create_delivery_order') {
-            const {
-                customer_name,
-                customer_phone,
-                customer_email,
-                delivery_address,
-                items,
-                notes,
-                source, // 'website' | 'phone' | 'walkin'
-                payment_method = 'cash_on_delivery'
-            } = actionData
-
-            // Get menu items
-            const itemIds = items.map((i: any) => i.menu_item_id)
-            const { data: menuItems } = await supabase
-                .from('menu_items')
-                .select('id, price, name, is_available, preparation_time')
-                .in('id', itemIds)
-
-            // Check availability
-            const unavailable = menuItems?.filter(m => !m.is_available) || []
-            if (unavailable.length > 0) {
-                return NextResponse.json({
-                    error: 'Items unavailable',
-                    items: unavailable.map((u: any) => u.name)
-                }, { status: 400 })
-            }
-
-            // Calculate totals
-            let subtotal = 0
-            const orderItems = items.map((item: any) => {
-                const menuItem = menuItems?.find(m => m.id === item.menu_item_id)
-                if (!menuItem) return null
-                const qty = Math.max(1, item.quantity || 1)
-                const itemTotal = menuItem.price * qty
-                subtotal += itemTotal
-                return {
-                    menu_item_id: item.menu_item_id,
-                    quantity: qty,
-                    unit_price: menuItem.price,
-                    subtotal: itemTotal,
-                    special_instructions: item.notes || null,
-                    status: 'pending'
-                }
-            }).filter(Boolean)
-
-            // Get restaurant settings
-            const { data: restaurant } = await supabase
-                .from('restaurants')
-                .select('tax_rate, delivery_fee')
-                .eq('id', targetRestaurantId)
-                .single()
-
-            const taxRate = restaurant?.tax_rate || 0
-            const deliveryFee = restaurant?.delivery_fee || 0
-            const tax = Math.round(subtotal * taxRate / 100)
-            const total = subtotal + tax + deliveryFee
-
-            // Generate order number
-            const { data: lastOrder } = await supabase
-                .from('orders')
-                .select('order_number')
-                .eq('restaurant_id', targetRestaurantId)
-                .order('order_number', { ascending: false })
-                .limit(1)
-                .single()
-
-            const nextOrderNum = (lastOrder?.order_number || 1000) + 1
-
-            // Get or create delivery virtual table
-            const { data: deliveryTable } = await supabase
-                .from('tables')
-                .select('id')
-                .eq('restaurant_id', targetRestaurantId)
-                .eq('table_number', 'DELIVERY')
-                .single()
-
-            const tableId = deliveryTable?.id
-
-            // Create order
-            const { data: order, error: orderError } = await supabase
-                .from('orders')
-                .insert({
-                    restaurant_id: targetRestaurantId,
-                    table_id: tableId,
-                    staff_id: staffData?.id,
-                    order_number: nextOrderNum,
-                    status: 'pending',
-                    order_type: 'delivery',
-                    subtotal,
-                    tax,
-                    delivery_fee: deliveryFee,
-                    total,
-                    notes: `${source?.toUpperCase() || 'ORDER'} | ${customer_name} | ${customer_phone}${delivery_address ? ` | ${delivery_address}` : ''}${notes ? ` | ${notes}` : ''}`,
-                    customer_name,
-                    customer_phone,
-                    customer_email,
-                    delivery_address,
-                    payment_method,
-                    source
-                })
-                .select('id, order_number, status, total')
-                .single()
-
-            if (orderError) {
-                console.error('Delivery order error:', orderError)
-                return NextResponse.json({ error: 'Failed to create order' }, { status: 500 })
-            }
-
-            // Insert order items
-            const orderItemsWithId = orderItems.map((item: any) => ({
-                ...item,
-                order_id: order.id
-            }))
-            await supabase.from('order_items').insert(orderItemsWithId)
-
-            // Add to kitchen queue
-            const maxPrepTime = Math.max(
-                ...(menuItems?.map(m => m.preparation_time || 15) || [15])
-            )
-
-            await supabase.from('kitchen_order_queue').insert({
-                order_id: order.id,
-                restaurant_id: targetRestaurantId,
-                priority: 'normal',
-                status: 'pending',
-                prep_time_seconds: maxPrepTime * 60
-            })
-
-            // Create delivery tracking
-            await supabase.from('delivery_tracking').insert({
-                order_id: order.id,
-                restaurant_id: targetRestaurantId,
-                rider_id: null,
-                status: 'preparing',
-                estimated_minutes: maxPrepTime + 20 // prep + delivery
-            })
-
-            // Log activity
-            await supabase.from('staff_activity_logs').insert({
-                restaurant_id: targetRestaurantId,
-                staff_id: staffData?.id,
-                action_type: 'delivery_order_created',
-                action_details: {
-                    order_id: order.id,
-                    source,
-                    customer_name,
-                    item_count: items.length
-                }
-            })
-
-            // Notify kitchen
-            const { data: kitchenStaff } = await supabase
-                .from('staff')
-                .select('id')
-                .eq('restaurant_id', targetRestaurantId)
-                .eq('role', 'kitchen')
-                .eq('is_active', true)
-
-            if (kitchenStaff?.length) {
-                for (const kitchen of kitchenStaff) {
-                    await supabase.from('staff_alerts').insert({
-                        restaurant_id: targetRestaurantId,
-                        to_staff_id: kitchen.id,
-                        alert_type: 'new_delivery',
-                        title: 'New Delivery Order',
-                        message: `Order #${nextOrderNum} - ${customer_name} - Rs.${total}`,
-                        priority: 'medium'
-                    })
-                }
-            }
-
-            return NextResponse.json({
-                success: true,
-                order: {
-                    id: order.id,
-                    order_number: order.order_number,
-                    status: order.status,
-                    subtotal,
-                    tax,
-                    delivery_fee: deliveryFee,
-                    total
-                }
-            })
-        }
-
-        // ============== DELIVERY RIDER ACTIONS ==============
-        if (action === 'assign_rider') {
-            const { order_id, rider_id } = actionData
-
-            await supabase
-                .from('delivery_tracking')
-                .update({
-                    rider_id,
-                    status: 'ready'
-                })
-                .eq('order_id', order_id)
-
-            // Notify rider
-            await supabase.from('staff_alerts').insert({
-                restaurant_id: targetRestaurantId,
-                to_staff_id: rider_id,
-                alert_type: 'delivery_assigned',
-                title: 'New Delivery Assigned',
-                message: `Pickup order from restaurant`,
-                priority: 'high',
-                related_order_id: order_id
-            })
-
-            return NextResponse.json({ success: true, message: 'Rider assigned' })
-        }
-
-        if (action === 'rider_pickup') {
-            const { order_id } = actionData
-
-            await supabase
-                .from('delivery_tracking')
-                .update({
-                    status: 'picked_up',
-                    pickup_time: new Date().toISOString()
-                })
-                .eq('order_id', order_id)
-
-            await supabase
-                .from('orders')
-                .update({ status: 'ready' })
-                .eq('id', order_id)
-
-            // Notify customer (via tracking)
-            const { data: order } = await supabase
-                .from('orders')
-                .select('order_number, customer_phone')
-                .eq('id', order_id)
-                .single()
-
-            return NextResponse.json({
-                success: true,
-                message: `Order #${order?.order_number} picked up`,
-                sms_hint: `Your order #${order?.order_number} is on its way!`
-            })
-        }
-
-        if (action === 'rider_delivered') {
-            const { order_id, customer_feedback, rating } = actionData
-
-            const { data: tracking } = await supabase
-                .from('delivery_tracking')
-                .select('pickup_time')
-                .eq('order_id', order_id)
-                .single()
-
-            const deliveryTime = tracking?.pickup_time
-                ? Math.round((Date.now() - new Date(tracking.pickup_time).getTime()) / 60000)
-                : 0
-
-            await supabase
-                .from('delivery_tracking')
-                .update({
-                    status: 'delivered',
-                    delivery_time: new Date().toISOString(),
-                    actual_minutes: deliveryTime,
-                    customer_feedback,
-                    rating
-                })
-                .eq('order_id', order_id)
-
-            await supabase
-                .from('orders')
-                .update({ status: 'served' })
-                .eq('id', order_id)
-
-            // Update rider metrics
-            if (staffData?.role === 'delivery') {
-                const today = new Date().toISOString().split('T')[0]
-                const { data: existingMetrics } = await supabase
-                    .from('staff_metrics')
-                    .select('*')
-                    .eq('staff_id', staffData.id)
-                    .eq('date', today)
-                    .single()
-
-                if (existingMetrics) {
-                    await supabase
-                        .from('staff_metrics')
-                        .update({
-                            orders_completed: (existingMetrics.orders_completed || 0) + 1,
-                            updated_at: new Date().toISOString()
-                        })
-                        .eq('id', existingMetrics.id)
-                } else {
-                    await supabase.from('staff_metrics').insert({
-                        staff_id: staffData.id,
-                        restaurant_id: targetRestaurantId,
-                        date: today,
-                        orders_completed: 1
-                    })
-                }
-
-                // Log activity
-                await supabase.from('staff_activity_logs').insert({
-                    restaurant_id: targetRestaurantId,
-                    staff_id: staffData.id,
-                    action_type: 'delivery_completed',
-                    action_details: { order_id, delivery_time: deliveryTime }
-                })
-            }
-
-            return NextResponse.json({
-                success: true,
-                message: 'Delivery confirmed',
-                delivery_time_minutes: deliveryTime
-            })
-        }
-
-        if (action === 'delivery_failed') {
-            const { order_id, reason } = actionData
-
-            await supabase
-                .from('delivery_tracking')
-                .update({
-                    status: 'failed'
-                })
-                .eq('order_id', order_id)
-
-            await supabase.from('staff_alerts').insert({
-                restaurant_id: targetRestaurantId,
-                alert_type: 'delivery_failed',
-                title: 'Delivery Failed',
-                message: `Order ${order_id.slice(0, 8)} - ${reason}`,
-                priority: 'urgent'
-            })
-
-            return NextResponse.json({ success: true, message: 'Marked as failed' })
-        }
-
-        // ============== GET DELIVERY STATUS ==============
-        if (action === 'get_delivery_status') {
-            const { order_id } = actionData
-
-            const { data: tracking } = await supabase
-                .from('delivery_tracking')
-                .select(`
-                    *,
-                    rider:staff(name, phone)
-                `)
-                .eq('order_id', order_id)
-                .single()
-
-            const { data: order } = await supabase
-                .from('orders')
-                .select('order_number, total, customer_name, delivery_address, status, created_at')
-                .eq('id', order_id)
-                .single()
-
-            if (!order) {
-                return NextResponse.json({ error: 'Order not found' }, { status: 404 })
-            }
-
-            // Status timeline
-            const timeline = []
-            timeline.push({ status: 'Order Received', time: order.created_at, done: true })
-            if (tracking?.pickup_time) {
-                timeline.push({ status: 'Picked Up', time: tracking.pickup_time, done: true })
-            }
-            if (tracking?.delivery_time) {
-                timeline.push({ status: 'Delivered', time: tracking.delivery_time, done: true })
-            }
-
-            return NextResponse.json({
-                order: {
-                    order_number: order.order_number,
-                    customer_name: order.customer_name,
-                    address: order.delivery_address,
-                    total: order.total,
-                    current_status: tracking?.status,
-                    rider: tracking?.rider,
-                    timeline,
-                    estimated_minutes: tracking?.estimated_minutes,
-                    actual_minutes: tracking?.actual_minutes
-                }
-            })
-        }
-
-        return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
-
-    } catch (err) {
-        console.error('Delivery flow error:', err)
-        return NextResponse.json({ error: 'Operation failed' }, { status: 500 })
+function legacyTracking(assignment: Record<string, unknown>, orderStatus: string) {
+    const status = assignment.status
+    return {
+        ...assignment,
+        status: status === 'dispatch_exception' ? 'failed'
+            : status === 'en_route' || status === 'arrived' ? 'in_transit'
+            : status === 'assigned' || status === 'pending_dispatch'
+                ? orderStatus === 'ready' ? 'ready' : 'preparing' : status,
+        pickup_time: assignment.actual_pickup_time,
+        delivery_time: assignment.actual_delivery_time,
     }
 }
 
-// GET - Get delivery orders for restaurant
+// Compatibility API. All writes use the same commands as current checkout and dispatch.
+export async function POST(request: NextRequest) {
+    try {
+        const auth = await getAuthenticatedStaff(request)
+        if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const body = await request.json().catch(() => null)
+        if (!body || typeof body.data !== 'object' || !body.data || Array.isArray(body.data)) {
+            return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+        }
+        if (body.restaurant_id !== undefined && body.restaurant_id !== auth.restaurantId) return tenantMismatchResponse()
+
+        const input = body.data
+        const canManage = managers.includes(auth.role)
+        const isRider = riders.includes(auth.role)
+
+        if (body.action === 'create_delivery_order') {
+            if (!canManage && !['cashier', 'waiter'].includes(auth.role)) {
+                return NextResponse.json({ error: 'Order creation access denied' }, { status: 403 })
+            }
+            const customerName = typeof input.customer_name === 'string' ? input.customer_name.trim().slice(0, 100) : ''
+            const customerPhone = typeof input.customer_phone === 'string' ? input.customer_phone.trim() : ''
+            const address = typeof input.delivery_address === 'string' ? input.delivery_address.trim().slice(0, 300) : ''
+            if (!customerName || !/^[\d\s()+-]{10,20}$/.test(customerPhone) || !address ||
+                !Array.isArray(input.items) || input.items.length < 1 || input.items.length > 100) {
+                return NextResponse.json({ error: 'Customer, valid phone, delivery address and items are required' }, { status: 400 })
+            }
+            const order = await OrderService.createOrderAtomic({
+                restaurant_id: auth.restaurantId,
+                staff_id: auth.staffId,
+                order_type: 'delivery',
+                customer_name: customerName,
+                customer_phone: customerPhone,
+                customer_email: typeof input.customer_email === 'string' ? input.customer_email.slice(0, 100) : null,
+                delivery_address: address,
+                notes: typeof input.notes === 'string' ? input.notes.slice(0, 500) : null,
+                source: ['website', 'phone', 'walkin'].includes(input.source) ? input.source : 'phone',
+                payment_method: 'cash_on_delivery',
+                client_order_id: request.headers.get('idempotency-key') ??
+                    request.headers.get('x-idempotency-key') ?? input.client_order_id,
+                items: input.items.map((item: any) => ({
+                    menu_item_id: item?.menu_item_id,
+                    quantity: item?.quantity ?? 1,
+                    special_instructions: typeof item?.notes === 'string' ? item.notes.slice(0, 500) : null,
+                    modifiers: item?.modifiers,
+                })),
+            })
+            if (!order.success) return NextResponse.json({ error: order.error }, { status: responseStatus(order.code) })
+            return NextResponse.json({ success: true, order: {
+                id: order.order_id, order_number: order.order_number, status: order.status,
+                subtotal: order.subtotal, tax: order.tax, delivery_fee: order.delivery_fee, total: order.total,
+            } }, { headers: privateHeaders })
+        }
+
+        if (!canManage && (!isRider || body.action === 'assign_rider')) {
+            return NextResponse.json({ error: 'Delivery access denied' }, { status: 403 })
+        }
+        if (typeof input.order_id !== 'string' || !uuid.test(input.order_id)) {
+            return NextResponse.json({ error: 'Valid order_id is required' }, { status: 400 })
+        }
+
+        const supabase = createAdminClient()
+        let lookup = supabase.from('delivery_assignments')
+            .select('*, order:orders!inner(order_number, total, status, created_at, restaurant_id), rider:staff(name, phone)')
+            .eq('restaurant_id', auth.restaurantId)
+            .eq('order.restaurant_id', auth.restaurantId)
+            .eq('order_id', input.order_id)
+            .neq('status', 'cancelled')
+        if (isRider) lookup = lookup.eq('rider_id', auth.staffId)
+        const { data: assignment, error: lookupError } = await lookup.maybeSingle()
+        if (lookupError) throw lookupError
+        if (!assignment) return NextResponse.json({ error: 'Delivery assignment not found' }, { status: 404 })
+
+        const scope = {
+            p_restaurant_id: auth.restaurantId,
+            p_assignment_id: assignment.id,
+            p_staff_id: auth.staffId,
+        }
+
+        let command
+        switch (body.action) {
+            case 'assign_rider':
+                if (typeof input.rider_id !== 'string' || !uuid.test(input.rider_id)) {
+                    return NextResponse.json({ error: 'Valid rider_id is required' }, { status: 400 })
+                }
+                command = await supabase.rpc('assign_delivery_rider', { ...scope, p_rider_id: input.rider_id })
+                break
+            case 'rider_pickup':
+                command = await supabase.rpc('transition_delivery_assignment', {
+                    ...scope, p_target: 'picked_up', p_can_manage: canManage,
+                })
+                break
+            case 'rider_delivered':
+                if (input.cash_collected !== undefined &&
+                    (!Number.isFinite(input.cash_collected) || input.cash_collected <= 0)) {
+                    return NextResponse.json({ error: 'Invalid cash amount' }, { status: 400 })
+                }
+                command = await supabase.rpc('complete_delivery_with_cash', {
+                    ...scope, p_cash_collected: input.cash_collected ?? null, p_can_manage: canManage,
+                })
+                break
+            case 'delivery_failed':
+                command = await supabase.rpc('report_delivery_exception', {
+                    ...scope, p_reason: typeof input.reason === 'string' ? input.reason : null,
+                })
+                break
+            case 'get_delivery_status': {
+                const order = Array.isArray(assignment.order) ? assignment.order[0] : assignment.order
+                const tracking = legacyTracking(assignment, order.status)
+                const timeline = [
+                    { status: 'Order Received', time: order.created_at, done: true },
+                    ...(assignment.actual_pickup_time ? [{ status: 'Picked Up', time: assignment.actual_pickup_time, done: true }] : []),
+                    ...(assignment.actual_delivery_time ? [{ status: 'Delivered', time: assignment.actual_delivery_time, done: true }] : []),
+                ]
+                return NextResponse.json({ order: {
+                    order_number: order.order_number, customer_name: assignment.customer_name,
+                    address: assignment.delivery_address, total: order.total, current_status: tracking.status,
+                    rider: assignment.rider, timeline, estimated_minutes: assignment.estimated_minutes,
+                    actual_minutes: assignment.actual_minutes,
+                } }, { headers: privateHeaders })
+            }
+            default:
+                return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
+        }
+
+        if (command.error) throw command.error
+        return NextResponse.json(command.data, {
+            status: command.data.success ? 200 : responseStatus(command.data.code),
+            headers: privateHeaders,
+        })
+    } catch (error) {
+        console.error('Delivery flow error:', error)
+        return NextResponse.json({ error: 'Delivery operation failed' }, { status: 500 })
+    }
+}
+
 export async function GET(request: NextRequest) {
     try {
-        const supabase = await createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+        const auth = await getAuthenticatedStaff(request)
+        if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        const restaurantId = request.nextUrl.searchParams.get('restaurant_id')
+        if (restaurantId !== null && restaurantId !== auth.restaurantId) return tenantMismatchResponse()
 
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        const isRider = riders.includes(auth.role)
+        if (!isRider && ![...managers, 'cashier'].includes(auth.role)) {
+            return NextResponse.json({ error: 'Delivery access denied' }, { status: 403 })
         }
 
-        const { searchParams } = new URL(request.url)
-        const view = searchParams.get('view') || 'active'
-        const restaurantId = searchParams.get('restaurant_id')
-
-        // Get staff restaurant
-        const { data: staffData } = await supabase
-            .from('staff')
-            .select('id, restaurant_id, role')
-            .eq('user_id', user.id)
-            .single()
-
-        const targetRestaurant = restaurantId || staffData?.restaurant_id
-        if (!targetRestaurant) {
-            return NextResponse.json({ error: 'No restaurant' }, { status: 404 })
-        }
-
-        if (view === 'pending') {
-            // Orders in kitchen/preparation
-            const { data: orders } = await supabase
-                .from('orders')
-                .select(`
-                    *,
-                    tracking:delivery_tracking(*)
-                `)
-                .eq('restaurant_id', targetRestaurant)
-                .eq('order_type', 'delivery')
-                .eq('tracking.status', 'preparing')
-                .order('created_at', { ascending: true })
-
-            return NextResponse.json({ orders: orders || [] })
-        }
-
-        if (view === 'ready') {
-            // Ready for pickup
-            const { data: orders } = await supabase
-                .from('orders')
-                .select(`
-                    *,
-                    tracking:delivery_tracking(*)
-                `)
-                .eq('restaurant_id', targetRestaurant)
-                .eq('order_type', 'delivery')
-                .in('tracking.status', ['ready', 'picked_up'])
-                .order('created_at', { ascending: true })
-
-            return NextResponse.json({ orders: orders || [] })
-        }
-
-        if (view === 'my_deliveries' && staffData?.role === 'delivery') {
-            // Rider's assigned deliveries
-            const { data: orders } = await supabase
-                .from('orders')
-                .select(`
-                    *,
-                    tracking:delivery_tracking(*)
-                `)
-                .eq('restaurant_id', targetRestaurant)
-                .eq('order_type', 'delivery')
-                .eq('tracking.rider_id', staffData.id)
-                .not('tracking.status', 'in', '("delivered","failed")')
-                .order('created_at', { ascending: true })
-
-            return NextResponse.json({ orders: orders || [] })
-        }
-
-        // Default - all active deliveries
-        const { data: orders } = await supabase
-            .from('orders')
-            .select(`
-                *,
-                tracking:delivery_tracking(*),
-                items:order_items(*)
-            `)
-            .eq('restaurant_id', targetRestaurant)
-            .eq('order_type', 'delivery')
-            .not('status', 'in', '("paid","cancelled")')
+        const view = request.nextUrl.searchParams.get('view') ?? 'active'
+        let query = createAdminClient().from('delivery_assignments')
+            .select('*, order:orders!inner(*, items:order_items(*))')
+            .eq('restaurant_id', auth.restaurantId)
+            .eq('order.restaurant_id', auth.restaurantId)
+            .not('status', 'in', '(cancelled,delivered,dispatch_exception)')
             .order('created_at', { ascending: false })
+            .limit(100)
 
-        return NextResponse.json({ orders: orders || [] })
+        if (isRider || view === 'my_deliveries') query = query.eq('rider_id', auth.staffId)
+        if (view === 'pending') query = query.in('order.status', ['pending', 'preparing'])
+        if (view === 'ready') query = query.in('order.status', ['ready', 'served', 'paid'])
 
-    } catch (err) {
-        console.error('Delivery flow GET error:', err)
-        return NextResponse.json({ error: 'Fetch failed' }, { status: 500 })
+        const { data, error } = await query
+        if (error) throw error
+        const orders = (data ?? []).map(({ order, ...assignment }) => {
+            const row = Array.isArray(order) ? order[0] : order
+            return { ...row, tracking: [legacyTracking(assignment, row.status)] }
+        })
+        return NextResponse.json({ orders }, { headers: privateHeaders })
+    } catch (error) {
+        console.error('Delivery flow GET error:', error)
+        return NextResponse.json({ error: 'Failed to load deliveries' }, { status: 500 })
     }
 }

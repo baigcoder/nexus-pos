@@ -9,11 +9,13 @@ import {
     createAuditEvent,
     logAuthEvent,
     getClientFingerprint,
-    checkRateLimit,
+    checkRateLimitPersistent,
     getRateLimitHeaders,
-    resetRateLimit,
+    resetRateLimitPersistent,
     AUTH_CONSTANTS,
 } from '@/lib/auth'
+import { jsonWithStaffSession } from '@/lib/staff-session'
+import type { UserRole } from '@/types'
 
 const EMAIL_RATE_CONFIG = {
     maxRequests: AUTH_CONSTANTS.PIN_MAX_ATTEMPTS_PER_IDENTIFIER,
@@ -62,7 +64,7 @@ export async function POST(request: NextRequest) {
         const clientIp = getClientIp(request)
         const fingerprint = getClientFingerprint(request)
 
-        const emailRateResult = checkRateLimit(`staff_email:email:${email}`, EMAIL_RATE_CONFIG)
+        const emailRateResult = await checkRateLimitPersistent(`staff_email:email:${email}`, EMAIL_RATE_CONFIG)
         if (!emailRateResult.allowed) {
             await logAuthEvent(createAuditEvent('rate_limit_exceeded', email, clientIp, { type: 'staff_email_email' }))
             return NextResponse.json(
@@ -75,7 +77,7 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        const ipRateResult = checkRateLimit(`staff_email:ip:${clientIp}`, IP_RATE_CONFIG)
+        const ipRateResult = await checkRateLimitPersistent(`staff_email:ip:${clientIp}`, IP_RATE_CONFIG)
         if (!ipRateResult.allowed) {
             await logAuthEvent(createAuditEvent('rate_limit_exceeded', clientIp, clientIp, { type: 'staff_email_ip' }))
             return NextResponse.json(
@@ -196,7 +198,7 @@ export async function POST(request: NextRequest) {
 
                 const { pin: _, temp_pin: __, ...safeStaff } = staff
 
-                return NextResponse.json({
+                return await jsonWithStaffSession({
                     success: true,
                     needsSetup: false,
                     justSetup: true,
@@ -208,10 +210,14 @@ export async function POST(request: NextRequest) {
                         avatar_url: (profileData as Record<string, unknown>)?.avatar_url || staff.avatar_url,
                     },
                     restaurant,
+                }, {
+                    staffId: staff.id,
+                    restaurantId: staff.restaurant_id,
+                    role: staff.role as UserRole,
                 })
             }
 
-            resetRateLimit(`staff_email:email:${email}`)
+            await resetRateLimitPersistent(`staff_email:email:${email}`)
 
             return NextResponse.json({
                 success: true,
@@ -261,7 +267,7 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        resetRateLimit(`staff_email:email:${email}`)
+        await resetRateLimitPersistent(`staff_email:email:${email}`)
 
         // Update last login timestamp
         await supabase
@@ -294,7 +300,7 @@ export async function POST(request: NextRequest) {
 
         const { pin: _, temp_pin: __, ...safeStaff } = staff
 
-        return NextResponse.json({
+        return await jsonWithStaffSession({
             success: true,
             needsSetup: false,
             justSetup: false,
@@ -303,6 +309,10 @@ export async function POST(request: NextRequest) {
                 ...restaurant,
                 owner_name: ownerName,
             },
+        }, {
+            staffId: staff.id,
+            restaurantId: staff.restaurant_id,
+            role: staff.role as UserRole,
         })
     } catch (error: unknown) {
         console.error('[STAFF_EMAIL_LOGIN] Error:', error instanceof Error ? error.message : 'Unknown error')

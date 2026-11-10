@@ -1,4 +1,4 @@
-import { sendNotification, generateTrackingUrl, NotificationType } from '@/lib/twilio'
+import { sendNotification, NotificationType } from '@/lib/twilio'
 
 /**
  * Notification service for order lifecycle events
@@ -22,8 +22,6 @@ export async function notifyOrderStatus(
     data: OrderNotificationData,
     channel: 'sms' | 'whatsapp' | 'both' = 'whatsapp'
 ) {
-    const trackingUrl = generateTrackingUrl(data.orderNumber)
-
     // Map order status to notification type
     const statusToType: Record<string, NotificationType> = {
         pending: 'order_confirmed',
@@ -46,7 +44,6 @@ export async function notifyOrderStatus(
         customerName: data.customerName,
         riderName: data.riderName,
         riderPhone: data.riderPhone,
-        trackingUrl,
         estimatedTime: data.estimatedTime,
     }, channel)
 }
@@ -67,7 +64,6 @@ export async function notifyRiderAssigned(data: OrderNotificationData) {
         customerName: data.customerName,
         riderName: data.riderName,
         riderPhone: data.riderPhone,
-        trackingUrl: generateTrackingUrl(data.orderNumber),
     }, 'whatsapp')
 }
 

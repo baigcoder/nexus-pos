@@ -3,17 +3,18 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import {
-  Package, Plus, Search, AlertTriangle, TrendingDown,
-  RotateCcw, Edit2, Truck
+  Package, Plus, AlertTriangle, TrendingDown,
+  RotateCcw, Edit2, Truck, Trash2
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/toast'
 import { useAuthStore } from '@/stores'
+import { Modal, Input, Button } from '@/components/ui/common'
 import { cn } from '@/lib/utils'
 import {
   PageHeader, StatCard, DashboardSearch, FilterButton,
   EmptyState, PageLoading, containerVariants, itemVariants,
-  SectionCard, ActionButton
+  ActionButton
 } from '@/components/dashboard/shared'
 
 interface InventoryItem {
@@ -37,33 +38,36 @@ export default function InventoryPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null)
+  const [restockItem, setRestockItem] = useState<InventoryItem | null>(null)
   const [filter, setFilter] = useState<'all' | 'low'>('all')
 
-  useEffect(() => {
-    async function loadInventory() {
-      if (!restaurant?.id) return
-      setIsLoading(true)
-      try {
-        const supabase = createClient()
-        const { data, error } = await supabase
-          .from('inventory')
-          .select('*')
-          .eq('restaurant_id', restaurant.id)
-          .eq('is_active', true)
-          .order('name')
+  async function loadInventory() {
+    if (!restaurant?.id) return
+    setIsLoading(true)
+    try {
+      const supabase = createClient()
+      const { data, error } = await supabase
+        .from('inventory')
+        .select('*')
+        .eq('restaurant_id', restaurant.id)
+        .eq('is_active', true)
+        .order('name')
 
-        if (error) throw error
-        setItems(data || [])
-      } catch (err) {
-        showError('Error', 'Failed to load inventory')
-      } finally {
-        setIsLoading(false)
-      }
+      if (error) throw error
+      setItems(data || [])
+    } catch (err) {
+      showError('Error', 'Failed to load inventory')
+    } finally {
+      setIsLoading(false)
     }
+  }
+
+  useEffect(() => {
     loadInventory()
   }, [restaurant?.id])
 
   const lowStockItems = items.filter(i => i.current_stock <= i.min_stock)
+  const outOfStockItems = items.filter(i => i.current_stock === 0)
   const filteredItems = items.filter(item => {
     const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase())
     const matchesFilter = filter === 'all' || (filter === 'low' && item.current_stock <= item.min_stock)
@@ -72,26 +76,14 @@ export default function InventoryPage() {
 
   const totalValue = items.reduce((sum, i) => sum + (i.current_stock * i.cost_per_unit), 0)
 
-  const handleRestock = async (id: string) => {
-    try {
-      const supabase = createClient()
-      const item = items.find(i => i.id === id)
-      if (!item) return
+  const openAddModal = () => {
+    setEditingItem(null)
+    setShowModal(true)
+  }
 
-      const { error } = await supabase
-        .from('inventory')
-        .update({
-          current_stock: item.current_stock + 10,
-          last_restocked: new Date().toISOString()
-        })
-        .eq('id', id)
-
-      if (error) throw error
-      setItems(items.map(i => i.id === id ? { ...i, current_stock: i.current_stock + 10, last_restocked: new Date().toISOString().split('T')[0] } : i))
-      success('Restocked', 'Added 10 units to inventory')
-    } catch (err) {
-      showError('Error', 'Failed to restock item')
-    }
+  const openEditModal = (item: InventoryItem) => {
+    setEditingItem(item)
+    setShowModal(true)
   }
 
   if (isLoading) return <PageLoading />
@@ -117,7 +109,7 @@ export default function InventoryPage() {
         }
         actions={
           <ActionButton
-            onClick={() => setShowModal(true)}
+            onClick={openAddModal}
             icon={Plus}
           >
             Add Item
@@ -146,10 +138,10 @@ export default function InventoryPage() {
           tone="success"
         />
         <StatCard
-          label="Categories"
-          value="6"
-          icon={Package}
-          tone="brand"
+          label="Out of Stock"
+          value={outOfStockItems.length}
+          icon={AlertTriangle}
+          tone={outOfStockItems.length > 0 ? 'error' : 'brand'}
         />
       </div>
 
@@ -183,7 +175,7 @@ export default function InventoryPage() {
           icon={Package}
           title="No Items Found"
           description={searchQuery ? "No items match your search." : "Your inventory is empty. Add your first item to get started."}
-          action={{ label: 'Add Item', onClick: () => setShowModal(true) }}
+          action={{ label: 'Add Item', onClick: openAddModal }}
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -229,12 +221,15 @@ export default function InventoryPage() {
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => handleRestock(inv.id)}
+                  onClick={() => setRestockItem(inv)}
                   className="flex-1 h-9 bg-[var(--surface)] border border-[var(--border)] rounded-lg text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider hover:bg-emerald-500/10 hover:text-emerald-500 hover:border-emerald-500/20 transition-all flex items-center justify-center gap-2"
                 >
                   <RotateCcw className="w-3 h-3" /> Restock
                 </button>
-                <button className="h-9 w-9 bg-[var(--surface)] border border-[var(--border)] rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-brand hover:border-brand/30 transition-all">
+                <button
+                  onClick={() => openEditModal(inv)}
+                  className="h-9 w-9 bg-[var(--surface)] border border-[var(--border)] rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-brand hover:border-brand/30 transition-all"
+                >
                   <Edit2 className="w-4 h-4" />
                 </button>
               </div>
@@ -242,6 +237,255 @@ export default function InventoryPage() {
           ))}
         </div>
       )}
+
+      {/* Add / Edit Modal */}
+      <Modal
+        isOpen={showModal}
+        onClose={() => setShowModal(false)}
+        title={editingItem ? 'Edit Item' : 'Add Inventory Item'}
+        size="md"
+      >
+        <InventoryItemForm
+          item={editingItem}
+          restaurantId={restaurant?.id}
+          onSuccess={() => {
+            setShowModal(false)
+            loadInventory()
+          }}
+          onDelete={() => {
+            setShowModal(false)
+            loadInventory()
+          }}
+          onCancel={() => setShowModal(false)}
+        />
+      </Modal>
+
+      {/* Restock Modal */}
+      <Modal
+        isOpen={!!restockItem}
+        onClose={() => setRestockItem(null)}
+        title={`Restock ${restockItem?.name || ''}`}
+        size="sm"
+      >
+        {restockItem && (
+          <RestockForm
+            item={restockItem}
+            onSuccess={() => {
+              setRestockItem(null)
+              loadInventory()
+            }}
+            onCancel={() => setRestockItem(null)}
+          />
+        )}
+      </Modal>
     </motion.div>
+  )
+}
+
+function InventoryItemForm({
+  item,
+  restaurantId,
+  onSuccess,
+  onDelete,
+  onCancel,
+}: {
+  item: InventoryItem | null
+  restaurantId?: string
+  onSuccess: () => void
+  onDelete: () => void
+  onCancel: () => void
+}) {
+  const { success, error: showError } = useToast()
+  const [form, setForm] = useState({
+    name: item?.name || '',
+    unit: item?.unit || '',
+    current_stock: item?.current_stock?.toString() || '',
+    min_stock: item?.min_stock?.toString() || '',
+    cost_per_unit: item?.cost_per_unit?.toString() || '',
+    supplier_name: item?.supplier_name || '',
+  })
+  const [isSaving, setIsSaving] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  const handleChange = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setForm({ ...form, [field]: e.target.value })
+  }
+
+  const handleSubmit = async () => {
+    if (!form.name || !form.unit || !restaurantId) return
+    setIsSaving(true)
+
+    try {
+      const supabase = createClient()
+      const payload = {
+        name: form.name.trim(),
+        unit: form.unit.trim(),
+        current_stock: parseFloat(form.current_stock) || 0,
+        min_stock: parseFloat(form.min_stock) || 0,
+        cost_per_unit: parseFloat(form.cost_per_unit) || 0,
+        supplier_name: form.supplier_name.trim() || null,
+        updated_at: new Date().toISOString(),
+      }
+
+      if (item) {
+        const { error } = await supabase
+          .from('inventory')
+          .update(payload)
+          .eq('id', item.id)
+        if (error) throw error
+        success('Updated', 'Item updated successfully')
+      } else {
+        const { error } = await supabase
+          .from('inventory')
+          .insert({
+            ...payload,
+            restaurant_id: restaurantId,
+            is_active: true,
+          })
+        if (error) throw error
+        success('Created', 'Item added to inventory')
+      }
+
+      onSuccess()
+    } catch (err) {
+      showError('Error', `Failed to ${item ? 'update' : 'add'} item`)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!item || !confirm('Remove this item from inventory?')) return
+    setIsDeleting(true)
+
+    try {
+      const supabase = createClient()
+      const { error } = await supabase
+        .from('inventory')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('id', item.id)
+      if (error) throw error
+      success('Removed', 'Item removed from inventory')
+      onDelete()
+    } catch (err) {
+      showError('Error', 'Failed to remove item')
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Input label="Item Name" value={form.name} onChange={handleChange('name')} placeholder="e.g., Chicken Breast" />
+      <div className="grid grid-cols-2 gap-4">
+        <Input label="Unit" value={form.unit} onChange={handleChange('unit')} placeholder="kg, liters, pcs" />
+        <Input label="Supplier" value={form.supplier_name} onChange={handleChange('supplier_name')} placeholder="Optional" />
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        <Input label="In Stock" type="number" min="0" step="any" value={form.current_stock} onChange={handleChange('current_stock')} placeholder="0" />
+        <Input label="Min Level" type="number" min="0" step="any" value={form.min_stock} onChange={handleChange('min_stock')} placeholder="0" />
+        <Input label="Cost / Unit" type="number" min="0" step="any" value={form.cost_per_unit} onChange={handleChange('cost_per_unit')} placeholder="0" />
+      </div>
+
+      <div className="flex gap-3 pt-2">
+        {item && (
+          <Button
+            variant="danger"
+            onClick={handleDelete}
+            isLoading={isDeleting}
+            icon={Trash2}
+            className="h-12"
+          >
+            Remove
+          </Button>
+        )}
+        <Button variant="outline" onClick={onCancel} className="flex-1 h-12">
+          Cancel
+        </Button>
+        <Button
+          onClick={handleSubmit}
+          disabled={!form.name || !form.unit || isSaving}
+          isLoading={isSaving}
+          className="flex-1 h-12"
+        >
+          {item ? 'Save Changes' : 'Add Item'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function RestockForm({
+  item,
+  onSuccess,
+  onCancel,
+}: {
+  item: InventoryItem
+  onSuccess: () => void
+  onCancel: () => void
+}) {
+  const { success, error: showError } = useToast()
+  const [quantity, setQuantity] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+
+  const handleRestock = async () => {
+    const amount = parseFloat(quantity)
+    if (!amount || amount <= 0) return
+    setIsSaving(true)
+
+    try {
+      const supabase = createClient()
+      const { error } = await supabase
+        .from('inventory')
+        .update({
+          current_stock: item.current_stock + amount,
+          last_restocked: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', item.id)
+
+      if (error) throw error
+      success('Restocked', `Added ${amount} ${item.unit} to ${item.name}`)
+      onSuccess()
+    } catch (err) {
+      showError('Error', 'Failed to restock item')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="p-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg text-center">
+        <span className="text-xl font-bold text-[var(--text-primary)]">{item.current_stock}</span>
+        <p className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider mt-1">
+          Current Stock ({item.unit})
+        </p>
+      </div>
+      <Input
+        label={`Quantity to Add (${item.unit})`}
+        type="number"
+        min="0"
+        step="any"
+        value={quantity}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQuantity(e.target.value)}
+        placeholder="0"
+        autoFocus
+      />
+      <div className="flex gap-3">
+        <Button variant="outline" onClick={onCancel} className="flex-1 h-12">
+          Cancel
+        </Button>
+        <Button
+          onClick={handleRestock}
+          disabled={!quantity || parseFloat(quantity) <= 0 || isSaving}
+          isLoading={isSaving}
+          icon={RotateCcw}
+          className="flex-1 h-12"
+        >
+          Restock
+        </Button>
+      </div>
+    </div>
   )
 }

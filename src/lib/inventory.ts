@@ -1,14 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
-
-/**
- * Inventory Management Service
- * Handles stock tracking, ingredient deduction, and low-stock alerts
- */
-
-export interface IngredientUsage {
-    ingredient_id: string
-    quantity_used: number
-}
+import { createAdminClient } from '@/lib/supabase/admin'
 
 export interface StockAlert {
     item_id: string
@@ -19,196 +9,98 @@ export interface StockAlert {
     severity: 'low' | 'critical' | 'out'
 }
 
-/**
- * Deduct ingredients from stock when order is completed
- */
+interface InventoryRow {
+    id: string
+    name: string
+    current_stock: number
+    min_stock: number
+    unit: string
+    cost_per_unit?: number
+}
+
+function toAlert(item: InventoryRow, stock: number): StockAlert | null {
+    if (stock === 0) {
+        return { item_id: item.id, item_name: item.name, current_stock: 0, min_stock: item.min_stock, unit: item.unit, severity: 'out' }
+    }
+    if (stock < item.min_stock * 0.5) {
+        return { item_id: item.id, item_name: item.name, current_stock: stock, min_stock: item.min_stock, unit: item.unit, severity: 'critical' }
+    }
+    if (stock <= item.min_stock) {
+        return { item_id: item.id, item_name: item.name, current_stock: stock, min_stock: item.min_stock, unit: item.unit, severity: 'low' }
+    }
+    return null
+}
+
 export async function deductIngredients(
     restaurantId: string,
     menuItemId: string,
     quantity: number
 ): Promise<{ success: boolean; alerts?: StockAlert[] }> {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
 
-    // Get ingredient mappings for this menu item
     const { data: mappings } = await supabase
         .from('menu_item_ingredients')
-        .select(`
-            ingredient_id,
-            quantity_per_item,
-            inventory_items (
-                id,
-                name,
-                current_stock,
-                min_stock,
-                unit
-            )
-        `)
+        .select('ingredient_id, quantity_per_item')
         .eq('menu_item_id', menuItemId)
 
     if (!mappings || mappings.length === 0) {
-        // No ingredient mappings, skip deduction
         return { success: true }
     }
 
     const alerts: StockAlert[] = []
 
-    // Deduct each ingredient
     for (const mapping of mappings) {
-        const usageAmount = mapping.quantity_per_item * quantity
-        const item = mapping.inventory_items as any
+        const { data: item } = await supabase
+            .from('inventory')
+            .select('id, name, current_stock, min_stock, unit')
+            .eq('id', mapping.ingredient_id)
+            .eq('restaurant_id', restaurantId)
+            .maybeSingle()
 
         if (!item) continue
 
-        const newStock = Math.max(0, item.current_stock - usageAmount)
+        const usageAmount = Number(mapping.quantity_per_item) * quantity
+        const newStock = Math.max(0, Number(item.current_stock) - usageAmount)
 
-        // Update stock
         await supabase
-            .from('inventory_items')
+            .from('inventory')
             .update({ current_stock: newStock })
             .eq('id', mapping.ingredient_id)
+            .eq('restaurant_id', restaurantId)
 
-        // Check for low stock alerts
-        if (newStock === 0) {
-            alerts.push({
-                item_id: item.id,
-                item_name: item.name,
-                current_stock: 0,
-                min_stock: item.min_stock,
-                unit: item.unit,
-                severity: 'out',
-            })
-        } else if (newStock < item.min_stock * 0.5) {
-            alerts.push({
-                item_id: item.id,
-                item_name: item.name,
-                current_stock: newStock,
-                min_stock: item.min_stock,
-                unit: item.unit,
-                severity: 'critical',
-            })
-        } else if (newStock < item.min_stock) {
-            alerts.push({
-                item_id: item.id,
-                item_name: item.name,
-                current_stock: newStock,
-                min_stock: item.min_stock,
-                unit: item.unit,
-                severity: 'low',
-            })
-        }
+        const alert = toAlert(item, newStock)
+        if (alert) alerts.push(alert)
     }
 
     return { success: true, alerts }
 }
 
-/**
- * Get all low stock alerts for a restaurant
- */
-export async function getLowStockAlerts(restaurantId: string): Promise<StockAlert[]> {
-    const supabase = await createClient()
-
+export async function deductOrderIngredients(restaurantId: string, orderId: string): Promise<void> {
+    const supabase = createAdminClient()
     const { data: items } = await supabase
-        .from('inventory_items')
-        .select('*')
+        .from('order_items')
+        .select('menu_item_id, quantity')
+        .eq('order_id', orderId)
+
+    if (!items) return
+
+    for (const item of items) {
+        if (!item.menu_item_id || !item.quantity) continue
+        await deductIngredients(restaurantId, item.menu_item_id, Number(item.quantity))
+    }
+}
+
+export async function getLowStockAlerts(restaurantId: string): Promise<StockAlert[]> {
+    const supabase = createAdminClient()
+    const { data: items } = await supabase
+        .from('inventory')
+        .select('id, name, current_stock, min_stock, unit')
         .eq('restaurant_id', restaurantId)
         .eq('is_active', true)
 
     if (!items) return []
 
     return items
-        .filter(item => item.current_stock <= item.min_stock)
-        .map(item => ({
-            item_id: item.id,
-            item_name: item.name,
-            current_stock: item.current_stock,
-            min_stock: item.min_stock,
-            unit: item.unit,
-            severity: item.current_stock === 0 ? 'out' as const :
-                item.current_stock < item.min_stock * 0.5 ? 'critical' as const :
-                    'low' as const,
-        }))
-}
-
-/**
- * Restock an inventory item
- */
-export async function restockItem(
-    itemId: string,
-    quantity: number,
-    costPerUnit?: number
-): Promise<{ success: boolean; error?: string }> {
-    const supabase = await createClient()
-
-    // Get current stock
-    const { data: item, error: fetchError } = await supabase
-        .from('inventory_items')
-        .select('current_stock')
-        .eq('id', itemId)
-        .single()
-
-    if (fetchError || !item) {
-        return { success: false, error: 'Item not found' }
-    }
-
-    const updateData: any = {
-        current_stock: item.current_stock + quantity,
-        last_restocked: new Date().toISOString(),
-    }
-
-    if (costPerUnit !== undefined) {
-        updateData.cost_per_unit = costPerUnit
-    }
-
-    const { error: updateError } = await supabase
-        .from('inventory_items')
-        .update(updateData)
-        .eq('id', itemId)
-
-    if (updateError) {
-        return { success: false, error: updateError.message }
-    }
-
-    return { success: true }
-}
-
-/**
- * Get inventory value summary
- */
-export async function getInventoryValue(restaurantId: string): Promise<{
-    totalValue: number
-    itemCount: number
-    lowStockCount: number
-    outOfStockCount: number
-}> {
-    const supabase = await createClient()
-
-    const { data: items } = await supabase
-        .from('inventory_items')
-        .select('*')
-        .eq('restaurant_id', restaurantId)
-        .eq('is_active', true)
-
-    if (!items) {
-        return { totalValue: 0, itemCount: 0, lowStockCount: 0, outOfStockCount: 0 }
-    }
-
-    let totalValue = 0
-    let lowStockCount = 0
-    let outOfStockCount = 0
-
-    for (const item of items) {
-        totalValue += item.current_stock * item.cost_per_unit
-        if (item.current_stock === 0) {
-            outOfStockCount++
-        } else if (item.current_stock < item.min_stock) {
-            lowStockCount++
-        }
-    }
-
-    return {
-        totalValue,
-        itemCount: items.length,
-        lowStockCount,
-        outOfStockCount,
-    }
+        .map((item) => toAlert(item, Number(item.current_stock)))
+        .filter((alert): alert is StockAlert => Boolean(alert))
 }

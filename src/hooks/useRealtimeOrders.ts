@@ -16,6 +16,8 @@ export function useRealtimeOrders(statusFilter?: OrderStatus | OrderStatus[]) {
     const { activeOrders, setActiveOrders, addOrder, updateOrderStatus, removeOrder } = useOrderStore()
     const channelRef = useRef<RealtimeChannel | null>(null)
     const [isLoading, setIsLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
+    const requestVersion = useRef(0)
 
     // Fetch initial orders
     const loadOrders = useCallback(async () => {
@@ -24,8 +26,11 @@ export function useRealtimeOrders(statusFilter?: OrderStatus | OrderStatus[]) {
             return
         }
 
+        const version = ++requestVersion.current
         setIsLoading(true)
         const result = await fetchOrders(restaurant.id)
+        if (version !== requestVersion.current) return
+        setError(result.success ? null : result.error || 'Could not load orders.')
         if (result.success && result.data) {
             let orders = result.data
 
@@ -90,6 +95,7 @@ export function useRealtimeOrders(statusFilter?: OrderStatus | OrderStatus[]) {
 
         // Cleanup
         return () => {
+            requestVersion.current++
             if (channelRef.current) {
                 unsubscribe(channelRef.current)
                 channelRef.current = null
@@ -108,6 +114,7 @@ export function useRealtimeOrders(statusFilter?: OrderStatus | OrderStatus[]) {
     return {
         orders: filteredOrders,
         isLoading,
+        error,
         refresh: loadOrders,
     }
 }
