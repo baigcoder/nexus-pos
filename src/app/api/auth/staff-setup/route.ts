@@ -13,6 +13,7 @@ import {
     resetRateLimit,
     AUTH_CONSTANTS,
 } from '@/lib/auth'
+import { setStaffSessionCookie } from '@/lib/auth/staff-session'
 
 const SETUP_RATE_CONFIG = {
     maxRequests: 5,
@@ -145,25 +146,6 @@ export async function POST(request: NextRequest) {
         updateError = hashedUpdate.error
 
         if (updateError) {
-            const fallbackUpdate = await supabase
-                .from('staff')
-                .update({
-                    pin: newPin,
-                    phone: cleanPhone,
-                    needs_setup: false,
-                    temp_pin: null,
-                    setup_completed_at: setupCompletedAt,
-                })
-                .eq('id', staff.id)
-
-            updateError = fallbackUpdate.error
-
-            if (!updateError) {
-                console.warn(`[STAFF_SETUP] Plain-text PIN fallback used for staff ${staff.id.slice(0, 8)}***`)
-            }
-        }
-
-        if (updateError) {
             console.error('[STAFF_SETUP] Update error:', updateError.message)
             return NextResponse.json(
                 { success: false, error: 'Failed to complete setup' },
@@ -177,7 +159,7 @@ export async function POST(request: NextRequest) {
 
         const { pin, temp_pin, ...safeStaff } = staff
 
-        return NextResponse.json({
+        return setStaffSessionCookie(NextResponse.json({
             success: true,
             staff: {
                 ...safeStaff,
@@ -185,7 +167,7 @@ export async function POST(request: NextRequest) {
             },
             restaurant: staff.restaurants,
             message: 'Setup completed successfully!',
-        })
+        }), staff.id)
     } catch (error: unknown) {
         console.error('[STAFF_SETUP] Error:', error instanceof Error ? error.message : 'Unknown error')
         return NextResponse.json(

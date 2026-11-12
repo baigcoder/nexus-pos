@@ -25,7 +25,18 @@ export async function POST(request: NextRequest) {
         }
 
         const { restaurant_id, role, action, data: actionData } = await request.json()
-        const targetRestaurantId = restaurant_id || staffData.restaurant_id
+        // Never trust a client-supplied restaurant: only an owner may target another restaurant they own.
+        let targetRestaurantId = staffData.restaurant_id
+        if (restaurant_id && restaurant_id !== staffData.restaurant_id) {
+            const { data: owned } = await supabase
+                .from('restaurants')
+                .select('id')
+                .eq('id', restaurant_id)
+                .eq('owner_id', user.id)
+                .maybeSingle()
+            if (!owned) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+            targetRestaurantId = owned.id
+        }
 
         // ============== TABLE MANAGEMENT ==============
         if (action === 'assign_table') {
@@ -42,6 +53,7 @@ export async function POST(request: NextRequest) {
                     occupied_at: new Date().toISOString()
                 })
                 .eq('id', table_id)
+                .eq('restaurant_id', targetRestaurantId)
 
             // Log activity
             await supabase.from('staff_activity_logs').insert({
@@ -67,6 +79,7 @@ export async function POST(request: NextRequest) {
                     occupied_at: null
                 })
                 .eq('id', table_id)
+                .eq('restaurant_id', targetRestaurantId)
 
             return NextResponse.json({ success: true, message: 'Table released' })
         }
@@ -102,6 +115,7 @@ export async function POST(request: NextRequest) {
                 .from('tables')
                 .select('id, current_waiter_id, restaurant_id')
                 .eq('id', table_id)
+                .eq('restaurant_id', targetRestaurantId)
                 .single()
 
             if (!table) {
@@ -274,12 +288,14 @@ export async function POST(request: NextRequest) {
                 .from('orders')
                 .update({ status: 'preparing' })
                 .eq('id', order_id)
+                .eq('restaurant_id', targetRestaurantId)
 
             // Notify waiter
             const { data: order } = await supabase
                 .from('orders')
                 .select('table_id, staff_id')
                 .eq('id', order_id)
+                .eq('restaurant_id', targetRestaurantId)
                 .single()
 
             if (order?.staff_id) {
@@ -323,12 +339,14 @@ export async function POST(request: NextRequest) {
                 .from('orders')
                 .update({ status: 'ready' })
                 .eq('id', order_id)
+                .eq('restaurant_id', targetRestaurantId)
 
             // Notify assigned waiter
             const { data: order } = await supabase
                 .from('orders')
                 .select('table_id, staff_id, table:tables(table_number)')
                 .eq('id', order_id)
+                .eq('restaurant_id', targetRestaurantId)
                 .single()
 
             if (order?.staff_id) {
@@ -378,6 +396,7 @@ export async function POST(request: NextRequest) {
                 .from('orders')
                 .update({ status: 'served' })
                 .eq('id', order_id)
+                .eq('restaurant_id', targetRestaurantId)
 
             // Log activity
             await supabase.from('staff_activity_logs').insert({
@@ -398,6 +417,7 @@ export async function POST(request: NextRequest) {
                 .from('orders')
                 .select('id, total, staff_id')
                 .eq('id', order_id)
+                .eq('restaurant_id', targetRestaurantId)
                 .single()
 
             if (!order) {
@@ -430,6 +450,7 @@ export async function POST(request: NextRequest) {
                 .from('orders')
                 .select('table_id')
                 .eq('id', order_id)
+                .eq('restaurant_id', targetRestaurantId)
                 .single()
 
             if (orderData?.table_id) {
@@ -437,6 +458,7 @@ export async function POST(request: NextRequest) {
                     .from('tables')
                     .update({ status: 'billing' })
                     .eq('id', orderData.table_id)
+                    .eq('restaurant_id', targetRestaurantId)
             }
 
             return NextResponse.json({ success: true, message: 'Bill requested' })
@@ -451,6 +473,7 @@ export async function POST(request: NextRequest) {
                 .from('orders')
                 .select('*')
                 .eq('id', order_id)
+                .eq('restaurant_id', targetRestaurantId)
                 .single()
 
             if (!order) {
@@ -481,6 +504,7 @@ export async function POST(request: NextRequest) {
                     paid_at: is_partial ? null : new Date().toISOString()
                 })
                 .eq('id', order_id)
+                .eq('restaurant_id', targetRestaurantId)
 
             // Update staff metrics
             const today = new Date().toISOString().split('T')[0]
@@ -534,6 +558,7 @@ export async function POST(request: NextRequest) {
                         occupied_at: null
                     })
                     .eq('id', order.table_id)
+                    .eq('restaurant_id', targetRestaurantId)
             }
 
             return NextResponse.json({

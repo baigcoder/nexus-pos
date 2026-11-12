@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { requireStaff } from '@/lib/api-auth'
 import { sendNotification, generateTrackingUrl, NotificationType } from '@/lib/twilio'
 
 export async function POST(request: NextRequest) {
     try {
+        // Unauthenticated callers could send SMS/WhatsApp on the restaurant's Twilio account.
+        const { response } = await requireStaff()(request)
+        if (response) return response
+
         const body = await request.json()
         const {
             phone,

@@ -10,10 +10,14 @@ import {
     logAuthEvent,
     getClientFingerprint,
     checkRateLimit,
+    getDurableLockoutSeconds,
+    recordDurableFailure,
+    clearDurableFailures,
     getRateLimitHeaders,
     resetRateLimit,
     AUTH_CONSTANTS,
 } from '@/lib/auth'
+import { setStaffSessionCookie } from '@/lib/auth/staff-session'
 
 const {
     PIN_MAX_ATTEMPTS_PER_IP: MAX_IP_ATTEMPTS,
@@ -98,21 +102,15 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        let dbIpResult: { data?: any; error?: any } | null = null
-        try {
-            dbIpResult = await supabase.rpc('check_otp_rate_limit', {
-                p_identifier: clientIp,
-                p_identifier_type: 'ip',
-                p_max_requests: MAX_IP_ATTEMPTS,
-                p_window_minutes: RATE_LIMIT_WINDOW_MIN,
-            })
-        } catch {
-            dbIpResult = null
-        }
-
-        if (dbIpResult?.data?.[0] && !dbIpResult.data[0].allowed) {
+        const ipKey = `staff_login:ip:${clientIp}`
+        const restaurantKey = `staff_login:restaurant:${restaurantSlug}`
+        const lockedFor = Math.max(
+            await getDurableLockoutSeconds(supabase, ipKey, IP_RATE_CONFIG),
+            await getDurableLockoutSeconds(supabase, restaurantKey, RESTAURANT_RATE_CONFIG),
+        )
+        if (lockedFor > 0) {
             return NextResponse.json(
-                { success: false, error: 'Too many attempts. Please try again later.', retryAfter: dbIpResult.data[0].retry_after_seconds },
+                { success: false, error: 'Too many attempts. Please try again later.', retryAfter: lockedFor },
                 { status: 429 }
             )
         }
@@ -183,6 +181,10 @@ export async function POST(request: NextRequest) {
 
         if (!matchedStaff) {
             await logAuthEvent(createAuditEvent('staff_login_failure', restaurantSlug, clientIp, { reason: 'invalid_pin', fingerprint }))
+            await Promise.all([
+                recordDurableFailure(supabase, ipKey, IP_RATE_CONFIG),
+                recordDurableFailure(supabase, restaurantKey, RESTAURANT_RATE_CONFIG),
+            ])
             const remainingAttempts = Math.min(ipRateResult.remainingRequests, restaurantRateResult.remainingRequests)
 
             return NextResponse.json(
@@ -193,6 +195,7 @@ export async function POST(request: NextRequest) {
 
         resetRateLimit(`staff_login:ip:${clientIp}`)
         resetRateLimit(`staff_login:restaurant:${restaurantSlug}`)
+        await Promise.all([clearDurableFailures(supabase, ipKey), clearDurableFailures(supabase, restaurantKey)])
 
         await logAuthEvent(createAuditEvent('staff_login', (matchedStaff as Record<string, unknown>).email as string, clientIp, {
             staffId: matchedStaff.id as string,
@@ -202,7 +205,7 @@ export async function POST(request: NextRequest) {
 
         const safeStaff = buildSafeStaffResponse(matchedStaff)
 
-        return NextResponse.json({
+        return setStaffSessionCookie(NextResponse.json({
             success: true,
             staff: safeStaff,
             restaurant: {
@@ -214,7 +217,7 @@ export async function POST(request: NextRequest) {
                 tax_rate: restaurant.tax_rate,
                 settings: restaurant.settings,
             },
-        })
+        }), matchedStaff.id as string)
     } catch (error: unknown) {
         console.error('[STAFF_LOGIN] Error:', error instanceof Error ? error.message : 'Unknown error')
         return NextResponse.json(
