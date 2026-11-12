@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import type { UserRole } from '@/types'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { STAFF_SESSION_COOKIE, verifyStaffSessionToken } from '@/lib/auth/staff-session'
 
 export interface ApiAuthContext {
     staffId: string
@@ -73,8 +74,8 @@ export async function getAuthenticatedStaff(request: NextRequest): Promise<ApiAu
             }
         }
 
-        // Try x-staff-id header (staff mobile login)
-        const staffId = request.headers.get('x-staff-id')
+        // Staff PIN/email login: signed httpOnly cookie set by the login routes
+        const staffId = verifyStaffSessionToken(request.cookies.get(STAFF_SESSION_COOKIE)?.value)
         if (staffId) {
             const adminClient = createAdminClient()
             const { data: staff } = await adminClient

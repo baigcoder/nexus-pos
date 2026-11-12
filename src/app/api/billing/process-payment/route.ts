@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
             .from('orders')
             .select('id, status, total, subtotal, tax, restaurant_id')
             .eq('id', orderId)
+            .eq('restaurant_id', auth!.restaurantId)
             .single()
 
         if (fetchError || !order) {
@@ -102,6 +103,7 @@ export async function POST(request: NextRequest) {
             .from('orders')
             .update(updateData)
             .eq('id', orderId)
+            .in('status', payableStatuses) // guards against a double-tap paying twice
             .select()
             .single()
 

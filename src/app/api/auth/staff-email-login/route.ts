@@ -10,10 +10,14 @@ import {
     logAuthEvent,
     getClientFingerprint,
     checkRateLimit,
+    getDurableLockoutSeconds,
+    recordDurableFailure,
+    clearDurableFailures,
     getRateLimitHeaders,
     resetRateLimit,
     AUTH_CONSTANTS,
 } from '@/lib/auth'
+import { setStaffSessionCookie } from '@/lib/auth/staff-session'
 
 const EMAIL_RATE_CONFIG = {
     maxRequests: AUTH_CONSTANTS.PIN_MAX_ATTEMPTS_PER_IDENTIFIER,
@@ -84,6 +88,15 @@ export async function POST(request: NextRequest) {
             )
         }
 
+        const emailKey = `staff_email:email:${email}`
+        const lockedFor = await getDurableLockoutSeconds(supabase, emailKey, EMAIL_RATE_CONFIG)
+        if (lockedFor > 0) {
+            return NextResponse.json(
+                { success: false, error: 'Too many login attempts. Please try again later.', retryAfter: lockedFor },
+                { status: 429 }
+            )
+        }
+
         let { data: staff, error: staffError } = await supabase
             .from('staff')
             .select('id, name, email, role, restaurant_id, is_active, pin, temp_pin, phone, avatar_url, created_at')
@@ -135,6 +148,7 @@ export async function POST(request: NextRequest) {
 
             if (!tempPinValid) {
                 await logAuthEvent(createAuditEvent('staff_login_failure', email, clientIp, { reason: 'invalid_temp_pin', fingerprint }))
+                await recordDurableFailure(supabase, emailKey, EMAIL_RATE_CONFIG)
                 return NextResponse.json(
                     { success: false, error: 'Invalid temporary PIN. Check your email for the 6-digit code.' },
                     { status: 401 }
@@ -196,7 +210,7 @@ export async function POST(request: NextRequest) {
 
                 const { pin: _, temp_pin: __, ...safeStaff } = staff
 
-                return NextResponse.json({
+                return setStaffSessionCookie(NextResponse.json({
                     success: true,
                     needsSetup: false,
                     justSetup: true,
@@ -208,10 +222,11 @@ export async function POST(request: NextRequest) {
                         avatar_url: (profileData as Record<string, unknown>)?.avatar_url || staff.avatar_url,
                     },
                     restaurant,
-                })
+                }), staff.id)
             }
 
             resetRateLimit(`staff_email:email:${email}`)
+            await clearDurableFailures(supabase, emailKey)
 
             return NextResponse.json({
                 success: true,
@@ -255,6 +270,7 @@ export async function POST(request: NextRequest) {
 
         if (!pinValid) {
             await logAuthEvent(createAuditEvent('staff_login_failure', email, clientIp, { reason: 'invalid_pin', fingerprint }))
+            await recordDurableFailure(supabase, emailKey, EMAIL_RATE_CONFIG)
             return NextResponse.json(
                 { success: false, error: 'Invalid PIN. Use your 4-digit permanent code.' },
                 { status: 401 }
@@ -262,6 +278,7 @@ export async function POST(request: NextRequest) {
         }
 
         resetRateLimit(`staff_email:email:${email}`)
+        await clearDurableFailures(supabase, emailKey)
 
         // Update last login timestamp
         await supabase
@@ -294,7 +311,7 @@ export async function POST(request: NextRequest) {
 
         const { pin: _, temp_pin: __, ...safeStaff } = staff
 
-        return NextResponse.json({
+        return setStaffSessionCookie(NextResponse.json({
             success: true,
             needsSetup: false,
             justSetup: false,
@@ -303,7 +320,7 @@ export async function POST(request: NextRequest) {
                 ...restaurant,
                 owner_name: ownerName,
             },
-        })
+        }), staff.id)
     } catch (error: unknown) {
         console.error('[STAFF_EMAIL_LOGIN] Error:', error instanceof Error ? error.message : 'Unknown error')
         return NextResponse.json(

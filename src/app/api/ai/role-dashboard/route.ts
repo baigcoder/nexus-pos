@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { STAFF_SESSION_COOKIE, verifyStaffSessionToken } from '@/lib/auth/staff-session'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 
@@ -116,7 +117,7 @@ Consider traffic patterns, distance, customer location.`,
 export async function GET(request: NextRequest) {
     try {
         // Support both cookie auth and header-based staff auth
-        const staffId = request.headers.get('x-staff-id')
+        const staffId = verifyStaffSessionToken(request.cookies.get(STAFF_SESSION_COOKIE)?.value)
         const targetRestaurantIdHeader = request.headers.get('x-restaurant-id')
 
         let supabase = await createClient()
@@ -134,6 +135,7 @@ export async function GET(request: NextRequest) {
                 .from('staff')
                 .select('id, role, restaurant_id, name')
                 .eq('id', staffId)
+                .eq('is_active', true)
                 .single()
 
             if (!staffInfo) {
@@ -181,7 +183,17 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        const targetRestaurantId = targetRestaurantIdHeader || staffData?.restaurant_id
+        // Only an owner may switch restaurants via header, and only to one they own.
+        let targetRestaurantId = staffData?.restaurant_id
+        if (targetRestaurantIdHeader && targetRestaurantIdHeader !== targetRestaurantId && cookieUser?.user) {
+            const { data: owned } = await createAdminClient()
+                .from('restaurants')
+                .select('id')
+                .eq('id', targetRestaurantIdHeader)
+                .eq('owner_id', cookieUser.user.id)
+                .maybeSingle()
+            if (owned) targetRestaurantId = owned.id
+        }
         const userRole = staffData?.role
         const staffIdForQuery = staffData?.id
 

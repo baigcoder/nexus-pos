@@ -14,4 +14,4 @@ export {
     hashForLookup,
     AUTH_CONSTANTS,
 } from './security'
-export { checkRateLimit, resetRateLimit, getRateLimitHeaders, type RateLimitConfig, type RateLimitResult } from './rate-limiter'
+export { checkRateLimit, getDurableLockoutSeconds, recordDurableFailure, clearDurableFailures, resetRateLimit, getRateLimitHeaders, type RateLimitConfig, type RateLimitResult } from './rate-limiter'

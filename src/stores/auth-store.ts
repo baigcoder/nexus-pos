@@ -123,11 +123,15 @@ export const useAuthStore = create<AuthState>()(
                 lastActivity: Date.now(),
             }),
 
-            logout: () => set({
+            logout: () => {
+                // Clear the httpOnly staff session cookie; JS can't touch it directly.
+                if (typeof window !== 'undefined') fetch('/api/auth/staff-logout', { method: 'POST' }).catch(() => {})
+                set({
                 ...initialState,
                 isLoading: false,
                 isHydrated: true,
-            }),
+                })
+            },
 
             reset: () => set(initialState),
 
