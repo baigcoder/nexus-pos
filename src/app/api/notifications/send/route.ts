@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { sendNotification, NotificationType } from '@/lib/twilio'
 import { getAuthenticatedStaff } from '@/lib/api-auth'
+import { checkRateLimitPersistent } from '@/lib/auth'
 
 export async function POST(request: NextRequest) {
     try {
         const auth = await getAuthenticatedStaff(request)
         if (!auth) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+        // Sends SMS/WhatsApp from the restaurant's Twilio number with caller-supplied text: front-of-house only, throttled.
+        if (!['owner', 'manager', 'cashier'].includes(auth.role)) {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+        }
+        const rate = await checkRateLimitPersistent(`notify:${auth.restaurantId}:${auth.staffId}`, { maxRequests: 30, windowMs: 60 * 60 * 1000 })
+        if (!rate.allowed) {
+            return NextResponse.json({ error: 'Too many notifications. Try again later.' }, { status: 429 })
         }
 
         const body = await request.json()

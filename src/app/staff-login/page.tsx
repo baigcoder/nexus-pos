@@ -9,7 +9,7 @@ import type { Restaurant, Staff } from '@/types'
 import styles from '@/components/account/account.module.css'
 
 type Step = 'email' | 'invite' | 'pin' | 'new-pin' | 'profile' | 'recover'
-type Preview = { id: string; name: string; role: string; needs_setup: boolean }
+type Preview = { id: string; name: string; role: string; needs_setup: boolean; has_pin?: boolean }
 type SavedAccount = { email: string; name: string; role: string; restaurantName: string; timestamp: number }
 type Reply = { success?: boolean; error?: string; retryAfter?: number; message?: string; needsSetup?: boolean; verified?: boolean; staff?: Staff & Preview; restaurant?: Restaurant }
 const accountKey = 'orderflow-staff-accounts'
@@ -236,6 +236,7 @@ export default function StaffLoginPage() {
                 <Submit busy={busy} disabled={fieldsDisabled}>{busy ? 'Please wait…' : buttonText}</Submit>
             </form>
             <div className={styles.links}>
+                {step === 'invite' && preview?.has_pin && <button type="button" className={styles.textLink} disabled={busy} onClick={() => goTo('pin')}>I remember my PIN</button>}
                 {step !== 'email' && <button type="button" className={styles.textLink} disabled={busy} onClick={() => goTo('email')}>Back to staff email</button>}
                 {['email', 'pin', 'invite'].includes(step) && <button type="button" className={styles.textLink} disabled={busy} onClick={() => goTo('recover')}>Forgot staff PIN?</button>}
                 <Link href="/login">Owner sign-in</Link><Link href="/screen-login">Pair a display</Link>
