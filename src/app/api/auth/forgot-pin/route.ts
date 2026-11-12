@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
 
         // Same reply whether or not the email exists, so this endpoint can't be used to list staff emails.
         if (staffError || !staff || !staff.is_active || staff.is_archived) {
-            return NextResponse.json({ success: true, message: 'If a staff account exists for this email, a reset PIN has been sent.', emailSent: false })
+            return NextResponse.json({ success: true, message: 'If a staff account exists for this email, a reset PIN has been sent.' })
         }
 
         // Get restaurant name
@@ -122,7 +122,6 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
             success: true,
             message: 'If a staff account exists for this email, a reset PIN has been sent.',
-            emailSent,
         })
 
     } catch (error: unknown) {
