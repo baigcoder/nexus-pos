@@ -272,9 +272,14 @@ export async function POST(request: NextRequest) {
 
         // Update last login timestamp
         // Signing in with the real PIN cancels any pending (possibly attacker-requested) reset.
+        // Separate update so it can't be lost if another column in a combined update is missing.
+        if (staff.temp_pin) {
+            await supabase.from('staff').update({ temp_pin: null }).eq('id', staff.id)
+        }
+
         await supabase
             .from('staff')
-            .update({ last_login_at: new Date().toISOString(), ...(staff.temp_pin ? { temp_pin: null } : {}) })
+            .update({ last_login_at: new Date().toISOString() })
             .eq('id', staff.id)
 
         const { data: restaurant } = await supabase
