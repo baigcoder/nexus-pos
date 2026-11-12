@@ -9,7 +9,7 @@ import {
     sanitizeErrorMessage,
     createAuditEvent,
     logAuthEvent,
-    checkRateLimit,
+    checkRateLimitPersistent,
     getRateLimitHeaders,
     AUTH_CONSTANTS,
 } from '@/lib/auth'
@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
 
         const clientIp = getClientIp(request)
 
-        const rateResult = checkRateLimit(`forgot_pin:${email}`, FORGOT_RATE_CONFIG)
+        const rateResult = await checkRateLimitPersistent(`forgot_pin:${email}`, FORGOT_RATE_CONFIG)
         if (!rateResult.allowed) {
             return NextResponse.json(
                 { success: false, error: 'Too many reset requests. Please try again later.' },
@@ -64,18 +64,9 @@ export async function POST(request: NextRequest) {
             .eq('email', email)
             .maybeSingle()
 
-        if (staffError || !staff) {
-            return NextResponse.json(
-                { success: false, error: 'No active staff account found with this email' },
-                { status: 404 }
-            )
-        }
-
-        if (!staff.is_active || staff.is_archived) {
-            return NextResponse.json(
-                { success: false, error: 'This account is inactive or archived' },
-                { status: 403 }
-            )
+        // Same reply whether or not the email exists, so this endpoint can't be used to list staff emails.
+        if (staffError || !staff || !staff.is_active || staff.is_archived) {
+            return NextResponse.json({ success: true, message: 'If a staff account exists for this email, a reset PIN has been sent.', emailSent: false })
         }
 
         // Get restaurant name
@@ -89,15 +80,13 @@ export async function POST(request: NextRequest) {
         const tempPin = generateTempPin()
         const hashedTempPin = await bcrypt.hash(tempPin, AUTH_CONSTANTS.PIN_BCRYPT_ROUNDS)
 
-        // Update staff record — clear permanent PIN and set temp PIN
+        // Keep the current PIN working until the temp PIN is used: anyone can request a reset for any
+        // email, so wiping the PIN here let an attacker lock staff out. Signing in with the old PIN cancels it.
         const { error: updateError } = await supabase
             .from('staff')
             .update({
                 temp_pin: hashedTempPin,
-                pin: null,
-                needs_setup: true,
                 invited_at: new Date().toISOString(),
-                setup_completed_at: null,
             })
             .eq('id', staff.id)
 
@@ -132,9 +121,7 @@ export async function POST(request: NextRequest) {
 
         return NextResponse.json({
             success: true,
-            message: emailSent
-                ? 'Reset PIN sent to your email. Check your inbox.'
-                : 'PIN reset processed. Ask your manager for the new PIN.',
+            message: 'If a staff account exists for this email, a reset PIN has been sent.',
             emailSent,
         })
 

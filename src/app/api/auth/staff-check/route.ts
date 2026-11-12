@@ -6,7 +6,7 @@ import {
     sanitizeErrorMessage,
     createAuditEvent,
     logAuthEvent,
-    checkRateLimit,
+    checkRateLimitPersistent,
     getRateLimitHeaders,
     AUTH_CONSTANTS,
 } from '@/lib/auth'
@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
 
         const clientIp = getClientIp(request)
 
-        const rateResult = checkRateLimit(`staff_check:${clientIp}`, CHECK_RATE_CONFIG)
+        const rateResult = await checkRateLimitPersistent(`staff_check:${clientIp}`, CHECK_RATE_CONFIG)
         if (!rateResult.allowed) {
             return NextResponse.json(
                 { success: false, error: 'Too many requests. Please try again later.' },
@@ -72,7 +72,8 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        const needsSetup = !!staff.temp_pin && !staff.pin
+        // A pending temp PIN (invite or reset) routes to the temp-PIN step; has_pin lets a reset user keep their old PIN.
+        const needsSetup = !!staff.temp_pin
         const pinLength = needsSetup ? AUTH_CONSTANTS.TEMP_PIN_LENGTH : AUTH_CONSTANTS.PIN_LENGTH
 
         await logAuthEvent(createAuditEvent('login_success', email, clientIp, {
@@ -88,6 +89,7 @@ export async function POST(request: NextRequest) {
                 email: staff.email,
                 role: staff.role,
                 needs_setup: needsSetup,
+                has_pin: !!staff.pin,
                 pin_length: pinLength,
             },
             message: needsSetup

@@ -117,7 +117,8 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        const needsSetup = !!staff.temp_pin && !staff.pin
+        // Temp-PIN flow for invites, and for resets when the 6-digit temp PIN is entered; a 4-digit PIN uses the normal path.
+        const needsSetup = !!staff.temp_pin && (!staff.pin || String(pin ?? '').length === 6)
 
         if (needsSetup) {
             const validatedTempPin = validatePin(pin, 6, 6)
@@ -270,9 +271,10 @@ export async function POST(request: NextRequest) {
         await resetRateLimitPersistent(`staff_email:email:${email}`)
 
         // Update last login timestamp
+        // Signing in with the real PIN cancels any pending (possibly attacker-requested) reset.
         await supabase
             .from('staff')
-            .update({ last_login_at: new Date().toISOString() })
+            .update({ last_login_at: new Date().toISOString(), ...(staff.temp_pin ? { temp_pin: null } : {}) })
             .eq('id', staff.id)
 
         const { data: restaurant } = await supabase
